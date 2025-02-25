@@ -33,10 +33,38 @@ int ImagePipeline::getTemplateID(Boxes& boxes) {
         std::cout << "img.rows:" << img.rows << std::endl;
         std::cout << "img.cols:" << img.cols << std::endl;
     } else {
-        /***YOUR CODE HERE***/
-        // Use: boxes.templates
-        cv::imshow("view", img);
+        // Convert the incoming image to grayscale.
+        cv::Mat grayImg;
+        cv::cvtColor(img, grayImg, cv::COLOR_BGR2GRAY);
+
+        double bestScore = -1.0;
+        int bestIndex = -1;
+        // Loop over each template in boxes.templates.
+        for (size_t i = 0; i < boxes.templates.size(); i++) {
+            cv::Mat templ = boxes.templates[i];
+            if(templ.empty())
+                continue;
+            cv::Mat result;
+            // Perform template matching using normalized correlation.
+            cv::matchTemplate(grayImg, templ, result, cv::TM_CCOEFF_NORMED);
+            double minVal, maxVal;
+            cv::minMaxLoc(result, &minVal, &maxVal, nullptr, nullptr);
+            if(maxVal > bestScore) {
+                bestScore = maxVal;
+                bestIndex = i;
+            }
+        }
+        // Display the current grayscale image (for debugging).
+        cv::imshow("view", grayImg);
         cv::waitKey(10);
-    }  
+
+        // Set a threshold for a "good" match.
+        double threshold = 0.8;  // Adjust this value as needed.
+        if(bestScore >= threshold) {
+            template_id = bestIndex;
+        } else {
+            template_id = -1;
+        }
+    }
     return template_id;
 }
