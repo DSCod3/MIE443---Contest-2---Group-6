@@ -6,84 +6,90 @@
 #include <fstream>
 #include <iostream>
 #include <vector>
+#include <ros/ros.h>
+#include <ros/spinner.h>  // For AsyncSpinner
 
 int main(int argc, char** argv) {
     // Initialize ROS node.
     ros::init(argc, argv, "contest2");
     ros::NodeHandle n;
 
-    // Robot pose object and subscriber.
+    // Use an AsyncSpinner for concurrent callback processing.
+    ros::AsyncSpinner spinner(4); // Use 4 threads.
+    spinner.start();
+
+    // Create and subscribe to AMCL pose updates.
     RobotPose robotPose(0, 0, 0);
     ros::Subscriber amclSub = n.subscribe("/amcl_pose", 1, &RobotPose::poseCallback, &robotPose);
 
-    // Load object coordinates and image templates.
-    Boxes boxes; 
+    // Load object coordinates and template images.
+    Boxes boxes;
     if (!boxes.load_coords() || !boxes.load_templates()) {
-        std::cout << "ERROR: could not load coords or templates" << std::endl;
+        std::cout << "ERROR: could not load coordinates or templates" << std::endl;
         return -1;
     }
     std::cout << "Loaded " << boxes.coords.size() << " object coordinates." << std::endl;
 
-    // Initialize Navigation and ImagePipeline.
+    // Initialize Navigation and ImagePipeline modules.
     Navigation nav;
     ImagePipeline imagePipeline(n);
 
-    // Give time for the robot pose to update.
-    ros::Duration(1.0).sleep();
+    // Allow some time for the AMCL pose to converge.
+    ros::Duration(0.5).sleep();
     float startX = robotPose.x;
     float startY = robotPose.y;
     float startPhi = robotPose.phi;
 
-    // Vector to store detection results for each object.
-    std::vector<int> tagResults(boxes.coords.size(), -1);
+    // Prepare a vector to store the detection results for each object.
+    std::vector<int> detectedTags(boxes.coords.size(), -1);
 
-    // Main algorithm: navigate to each object and perform tag detection.
+    // Iterate through each object coordinate.
     for (size_t i = 0; i < boxes.coords.size(); i++) {
         float targetX = boxes.coords[i][0];
         float targetY = boxes.coords[i][1];
         float targetPhi = boxes.coords[i][2];
-        std::cout << "Navigating to object " << i 
-                  << " at (" << targetX << ", " << targetY << ", " << targetPhi << ")" << std::endl;
+        ROS_INFO("Navigating to object %zu at (%.2f, %.2f, %.2f)...", i, targetX, targetY, targetPhi);
 
-        // Use the Navigation module to send a goal to move_base.
+        // Use move_base (via Navigation module) to go to the target.
         bool reached = nav.moveToGoal(targetX, targetY, targetPhi);
         if (!reached) {
-            std::cout << "Failed to reach object " << i << ". Skipping image detection." << std::endl;
-            tagResults[i] = -1;
+            ROS_WARN("Failed to reach object %zu. Skipping tag detection.", i);
+            detectedTags[i] = -1;
             continue;
         }
-        // Allow the robot to settle.
-        ros::Duration(1.0).sleep();
+        // Allow a brief pause for stabilization.
+        ros::Duration(0.5).sleep();
 
-        // Perform image processing to detect the feature tag.
-        int detectedTag = imagePipeline.getTemplateID(boxes);
-        std::cout << "Detected tag " << detectedTag << " for object " << i << std::endl;
-        tagResults[i] = detectedTag;
+        // Use SURF-based image processing to detect the tag.
+        int tagID = imagePipeline.getTemplateID(boxes);
+        ROS_INFO("Detected tag %d for object %zu", tagID, i);
+        detectedTags[i] = tagID;
     }
 
-    // After visiting all objects, return to the starting position.
-    std::cout << "Returning to starting position (" << startX << ", " << startY << ", " << startPhi << ")" << std::endl;
+    // After processing all objects, return to the starting position.
+    ROS_INFO("Returning to starting position (%.2f, %.2f, %.2f)...", startX, startY, startPhi);
     bool returned = nav.moveToGoal(startX, startY, startPhi);
     if (!returned) {
-        std::cout << "Failed to return to starting position." << std::endl;
+        ROS_WARN("Failed to return to starting position.");
     }
 
-    // Output the detection results to a file.
+    // Write the detection results to an output file.
     std::ofstream outfile("contest2_results.txt");
     if (!outfile.is_open()) {
-        std::cout << "ERROR: Unable to open output file." << std::endl;
+        ROS_ERROR("Could not open output file for writing results.");
     } else {
         outfile << "Contest 2 Object Detection Results\n";
-        for (size_t i = 0; i < tagResults.size(); i++) {
+        for (size_t i = 0; i < detectedTags.size(); i++) {
             outfile << "Object " << i << ": ";
-            if (tagResults[i] == -1)
+            if (detectedTags[i] == -1)
                 outfile << "No tag detected\n";
             else
-                outfile << "Tag " << tagResults[i] << "\n";
+                outfile << "Tag " << detectedTags[i] << "\n";
         }
         outfile.close();
-        std::cout << "Results written to contest2_results.txt" << std::endl;
+        ROS_INFO("Results written to contest2_results.txt");
     }
     
+    spinner.stop();
     return 0;
 }
