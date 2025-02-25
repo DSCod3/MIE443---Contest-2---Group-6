@@ -8,6 +8,20 @@
 #include <vector>
 #include <ros/ros.h>
 #include <ros/spinner.h>  // For AsyncSpinner
+#include <cmath>          // For cos(), sin()
+
+// Define an offset distance (in meters) so the robot stops at a safe distance from the object.
+const float STOP_OFFSET = 0.3;  
+
+// Helper: Adjust target coordinate based on object's orientation.
+void adjustGoalCoordinates(float originalX, float originalY, float objectPhi,
+                           float &adjustedX, float &adjustedY) {
+    // Convert orientation to radians.
+    float phiRad = objectPhi * M_PI / 180.0;
+    // Offset the goal backwards along the object's orientation.
+    adjustedX = originalX - STOP_OFFSET * cos(phiRad);
+    adjustedY = originalY - STOP_OFFSET * sin(phiRad);
+}
 
 int main(int argc, char** argv) {
     // Initialize ROS node.
@@ -43,15 +57,32 @@ int main(int argc, char** argv) {
     // Prepare a vector to store the detection results for each object.
     std::vector<int> detectedTags(boxes.coords.size(), -1);
 
+// Wait until an initial pose estimate is received
+ros::Rate waitRate(10);
+while(ros::ok() && !robotPose.pose_received) {
+    ROS_WARN("Waiting for initial pose estimate. Please use RViz's '2D Pose Estimate' tool.");
+    waitRate.sleep();
+}
+ROS_INFO("Initial pose estimate received: (%.2f, %.2f, %.2f)", robotPose.x, robotPose.y, robotPose.phi);
+
     // Iterate through each object coordinate.
     for (size_t i = 0; i < boxes.coords.size(); i++) {
-        float targetX = boxes.coords[i][0];
-        float targetY = boxes.coords[i][1];
-        float targetPhi = boxes.coords[i][2];
-        ROS_INFO("Navigating to object %zu at (%.2f, %.2f, %.2f)...", i, targetX, targetY, targetPhi);
+        float objX = boxes.coords[i][0];
+        float objY = boxes.coords[i][1];
+        float objPhi = boxes.coords[i][2]; // object's orientation in degrees
+        
+        // Adjust goal coordinates to ensure a safe stop and correct view of tag.
+        float goalX, goalY;
+        adjustGoalCoordinates(objX, objY, objPhi, goalX, goalY);
 
-        // Use move_base (via Navigation module) to go to the target.
-        bool reached = nav.moveToGoal(targetX, targetY, targetPhi);
+        // Set the goal orientation to be the same as object's, so robot faces the tag.
+        float goalPhi = objPhi;
+
+        ROS_INFO("Navigating to object %zu at adjusted goal (%.2f, %.2f, %.2f)...", 
+                 i, goalX, goalY, goalPhi);
+
+        // Use move_base (via Navigation module) to go to the adjusted target.
+        bool reached = nav.moveToGoal(goalX, goalY, goalPhi);
         if (!reached) {
             ROS_WARN("Failed to reach object %zu. Skipping tag detection.", i);
             detectedTags[i] = -1;
