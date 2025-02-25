@@ -11,4 +11,5 @@ void RobotPose::poseCallback(const geometry_msgs::PoseWithCovarianceStamped& msg
 	phi = tf::getYaw(msg.pose.pose.orientation);
 	x = msg.pose.pose.position.x;
 	y = msg.pose.pose.position.y;
+	pose_received = true;
 }
