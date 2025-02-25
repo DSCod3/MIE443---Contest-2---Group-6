@@ -1,0 +1,29 @@
+# coord1 rice krispies, bl
+0.818, 1.09
+0.875, 0.892
+yaw: -73.94
+
+
+
+# coord2  rice krispies, br
+2.76, 1.65
+2.5, 1.59
+yaw: -167.01
+
+
+# coord3 blank, mr
+2.31, 2.71
+1.96, 2.59
+yaw: -161.08
+
+
+# coord4 cinamon toast crunch, v
+1.27, 3.53
+1.04, 3.24
+yaw: -128.42
+
+
+# coord5 raisin bran, w
+-0.04, 4.3
+0.03, 4.04
+yaw: -74.93
