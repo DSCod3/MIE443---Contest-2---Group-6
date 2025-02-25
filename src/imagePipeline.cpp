@@ -1,6 +1,7 @@
 #include "imagePipeline.h"
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc.hpp>
+#include "boxes.h"
 
 #define IMAGE_TYPE sensor_msgs::image_encodings::BGR8
 #define IMAGE_TOPIC "camera/rgb/image_raw" // Kinect: "camera/rgb/image_raw", webcam: "camera/image"
