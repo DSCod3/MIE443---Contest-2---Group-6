@@ -36,7 +36,11 @@ float getDynamicOffset() {
 // Adjust goal coordinates based on the object coordinate and dynamic offset.
 void adjustGoalCoordinates(float origX, float origY, float objPhi, float &adjX, float &adjY) {
     float dynamicOffset = getDynamicOffset();
-    float phiRad = objPhi * M_PI / 180.0;
+    // Invert the object's yaw (or add 180° if that suits your coordinate system)
+    float phiRad = (-objPhi) * M_PI / 180.0;
+    // Alternatively, if adding 180 degrees makes more sense:
+    // float phiRad = ((objPhi + 180.0f) * M_PI / 180.0);
+
     // Offset the goal along the object's orientation.
     adjX = origX - dynamicOffset * cos(phiRad);
     adjY = origY - dynamicOffset * sin(phiRad);
