@@ -77,6 +77,7 @@ int main(int argc, char** argv) {
     // Subscribe to AMCL pose updates.
     RobotPose robotPose(0, 0, 0);
     ros::Subscriber amclSub = n.subscribe("/amcl_pose", 1, &RobotPose::poseCallback, &robotPose);
+    ros::Subscriber laserSub = n.subscribe("/scan", 10, laserCallback);
     
     // Wait for a valid initial pose.
     ros::Rate waitRate(10);
