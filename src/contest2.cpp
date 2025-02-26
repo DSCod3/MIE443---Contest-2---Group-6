@@ -15,9 +15,9 @@
 extern DistancesStruct distances;
 
 // Dynamic offset computation parameters.
-const float MIN_OFFSET = 0.3;       // Minimum safe offset (meters)
-const float MAX_OFFSET = 0.8;       // Maximum offset (meters)
-const float SAFETY_MARGIN = 0.2;    // Margin to leave between the object and robot
+const float MIN_OFFSET = 0.15;       // Minimum safe offset (meters)
+const float MAX_OFFSET = 0.75;       // Maximum offset (meters)
+const float SAFETY_MARGIN = 0.1;    // Margin to leave between the object and robot
 
 // Dynamically compute an offset based on the robot's current front distance.
 float getDynamicOffset() {
