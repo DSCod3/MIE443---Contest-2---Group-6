@@ -10,39 +10,25 @@
 #include <ros/spinner.h>
 #include <cmath>
 
+// Macros for conversion.
 #define DEG2RAD(deg) ((deg) * (M_PI / 180.0))
 #define RAD2DEG(rad) ((rad) * (180.0 / M_PI))
 
-// Global movement variables.
+// Global movement constants.
 bool facingInwards = true;
-float offsetFromTarget = 0.40;  // Base offset (can be updated dynamically)
-uint8_t destinationNumber = 0;
-float targetX, targetY, targetPhi;
-float destX, destY, destPhi;
+float baseOffset = 0.50;  // Base offset from target (meters)
 
-// --- Dynamic Offset Computation ---
-// For now, return the constant offsetFromTarget.
-float getDynamicOffset() {
-    return offsetFromTarget;
-}
-
-// Helper function to adjust the goal coordinates.
-// Adds 180° to the object's yaw (in degrees) so the robot approaches from the correct side.
-// origX, origY: object's coordinates (from XML)
-// objPhi: object's orientation in degrees
-// adjX, adjY: computed adjusted goal coordinates.
+// Helper function: Computes adjusted goal coordinates based on object's coordinate,
+// by adding 180° to the object's orientation (if needed) then subtracting an offset.
+// Here, we use the object's original orientation (in degrees) to compute the offset.
 void adjustGoalCoordinates(float origX, float origY, float objPhi, float &adjX, float &adjY) {
-    float dynamicOffset = getDynamicOffset();
-    // Add 180 degrees to flip the orientation.
-    float phiAdjustedDeg = objPhi + 180.0f;
-    // Convert to radians.
-    float phiRad = DEG2RAD(phiAdjustedDeg);
-    // Compute adjusted goal so the robot stops "dynamicOffset" meters before the object.
-    adjX = origX - dynamicOffset * std::cos(phiRad);
-    adjY = origY - dynamicOffset * std::sin(phiRad);
+    // We use a fixed offset (baseOffset) for now.
+    float phiRad = DEG2RAD(objPhi + 180.0f);
+    adjX = origX - baseOffset * std::cos(phiRad);
+    adjY = origY - baseOffset * std::sin(phiRad);
 }
 
-// Wait for AMCL convergence by checking that the robot's pose remains nearly constant over time.
+// Wait for AMCL convergence: repeatedly check that the robot's pose is nearly constant.
 void waitForConvergence(RobotPose &robotPose) {
     ros::Rate rate(10);
     float prevX = robotPose.x, prevY = robotPose.y, prevPhi = robotPose.phi;
@@ -52,9 +38,9 @@ void waitForConvergence(RobotPose &robotPose) {
         float dx = std::fabs(robotPose.x - prevX);
         float dy = std::fabs(robotPose.y - prevY);
         float dphi = std::fabs(robotPose.phi - prevPhi);
-        if (dx < 0.01 && dy < 0.01 && dphi < 0.5) {  // thresholds: adjust as needed
+        if (dx < 0.01 && dy < 0.01 && dphi < 0.5) {
             if ((ros::Time::now() - stableStart).toSec() > 2.0) {
-                ROS_INFO("AMCL has converged: (%.2f, %.2f, %.2f)", robotPose.x, robotPose.y, robotPose.phi);
+                ROS_INFO("AMCL converged: (%.2f, %.2f, %.2f)", robotPose.x, robotPose.y, robotPose.phi);
                 break;
             }
         } else {
@@ -67,12 +53,23 @@ void waitForConvergence(RobotPose &robotPose) {
     }
 }
 
+// Mapping from template indices to tag names.
+std::string getTagName(int templateID) {
+    if (templateID == 0)
+        return "Raisin Bran";
+    else if (templateID == 1)
+        return "Cinnamon Toast Crunch";
+    else if (templateID == 2)
+        return "Rice Krispies";
+    else
+        return "Blank";
+}
+
 int main(int argc, char** argv) {
-    // Initialize ROS node.
     ros::init(argc, argv, "contest2");
     ros::NodeHandle n;
     
-    // Start an AsyncSpinner so that callbacks (AMCL, image, etc.) run concurrently.
+    // Use AsyncSpinner for concurrent callbacks.
     ros::AsyncSpinner spinner(4);
     spinner.start();
     
@@ -86,9 +83,8 @@ int main(int argc, char** argv) {
         ROS_WARN("Waiting for initial pose estimate. Please use RViz's '2D Pose Estimate' tool.");
         waitRate.sleep();
     }
-    // Extra delay to allow costmap and AMCL to converge.
-    ros::Duration(2.0).sleep();
-    ROS_INFO("Initial pose estimate: (%.2f, %.2f, %.2f)", robotPose.x, robotPose.y, robotPose.phi);
+    ros::Duration(2.0).sleep(); // Allow costmaps to stabilize.
+    ROS_INFO("Initial pose: (%.2f, %.2f, %.2f)", robotPose.x, robotPose.y, robotPose.phi);
     
     // Load object coordinates and template images.
     Boxes boxes;
@@ -99,78 +95,121 @@ int main(int argc, char** argv) {
     std::cout << "Loaded " << boxes.coords.size() << " object coordinates." << std::endl;
     
     // Initialize Navigation and ImagePipeline modules.
-    Navigation nav;
+    // Note: Navigation::moveToGoal expects orientation in degrees.
     ImagePipeline imagePipeline(n);
     
-    // Record the starting pose.
+    // Record starting pose.
     float startX = robotPose.x;
     float startY = robotPose.y;
-    float startPhi = robotPose.phi; // in radians
+    float startPhi_deg = RAD2DEG(robotPose.phi);  // convert to degrees
     
-    // Prepare a vector to store detection results.
-    std::vector<int> detectedTags(boxes.coords.size(), -1);
+    // Vector for storing final detection results (one per object).
+    std::vector<std::string> finalResults(boxes.coords.size(), "Blank");
     
-    // Iterate over each object coordinate.
+    // To detect duplicates, keep track of already seen tag names.
+    std::vector<std::string> seenTags;
+    
+    // For each object in the coordinate list.
     for (size_t i = 0; i < boxes.coords.size(); i++) {
-        // Retrieve the object coordinate.
+        // Get the object's coordinates and orientation.
         float objX = boxes.coords[i][0];
         float objY = boxes.coords[i][1];
-        // For myhal_scene.xml, φ is provided in degrees.
-        float objPhi_deg = boxes.coords[i][2];
-        // We'll use the object orientation in degrees for goal adjustment.
+        float objPhi_deg = boxes.coords[i][2];  // from myhal_scene.xml (in degrees)
         
-        destX = objX;
-        destY = objY;
-        destPhi = objPhi_deg;
-        
-        // Compute target orientation.
-        float targetPhi_deg;
+        // Determine the base target orientation.
+        float baseTargetPhi_deg;
         if (facingInwards) {
-            targetPhi_deg = objPhi_deg + 180.0f;  // flip by 180° (in degrees)
-            while (targetPhi_deg > 360.0f)
-                targetPhi_deg -= 360.0f;
+            // If facing inwards, approach from the opposite side.
+            baseTargetPhi_deg = objPhi_deg + 180.0f;
+            if (baseTargetPhi_deg >= 360.0f)
+                baseTargetPhi_deg -= 360.0f;
         } else {
-            targetPhi_deg = objPhi_deg;
+            baseTargetPhi_deg = objPhi_deg;
         }
         
-        ROS_INFO("Moving to destination %zu: Object coords (%.2f, %.2f, %.2f deg)", i, destX, destY, objPhi_deg);
+        ROS_INFO("Processing object %zu: (%.2f, %.2f, %.2f deg)", i, objX, objY, objPhi_deg);
         
-        // Compute adjusted goal coordinates using dynamic offset.
-        adjustGoalCoordinates(destX, destY, objPhi_deg, targetX, targetY);
-        ROS_INFO("Adjusted goal: (%.2f, %.2f) with target φ=%.2f deg", targetX, targetY, targetPhi_deg);
-        
-        // Wait for AMCL convergence before sending each goal.
-        waitForConvergence(robotPose);
-        
-        // Send the goal via the Navigation module.
-        if (!Navigation::moveToGoal(targetX, targetY, targetPhi_deg)) {
-            ROS_WARN("moveToGoal failed for object %zu. Skipping tag detection.", i);
-            detectedTags[i] = -1;
-            continue;
+        // We'll take 3 images: one straight on, one with +30° offset, one with -30° offset.
+        // We'll store the detection results.
+        std::vector<int> detections;
+        std::vector<float> angleOffsets = {0.0, 30.0, -30.0};
+        for (size_t j = 0; j < angleOffsets.size(); j++) {
+            float currentGoalPhi_deg = baseTargetPhi_deg + angleOffsets[j];
+            // Normalize angle.
+            while (currentGoalPhi_deg >= 360.0f) currentGoalPhi_deg -= 360.0f;
+            while (currentGoalPhi_deg < 0.0f) currentGoalPhi_deg += 360.0f;
+            
+            // Compute an adjusted goal position using a helper that uses the object's original orientation.
+            float goalX, goalY;
+            // Use the original object's orientation (objPhi_deg) for offset calculation.
+            // (Assumes that adding 180° in adjustGoalCoordinates is done inside that function.)
+            adjustGoalCoordinates(objX, objY, objPhi_deg, goalX, goalY);
+            
+            ROS_INFO("Moving to object %zu, view %zu at goal (%.2f, %.2f, %.2f deg)", 
+                     i, j, goalX, goalY, currentGoalPhi_deg);
+            
+            // Wait for convergence before sending the goal.
+            waitForConvergence(robotPose);
+            
+            // Send the goal using the Navigation module.
+            if (!Navigation::moveToGoal(goalX, goalY, currentGoalPhi_deg)) {
+                ROS_WARN("Failed to reach object %zu, view %zu. Skipping this view.", i, j);
+                detections.push_back(-1);
+                continue;
+            }
+            // Allow brief stabilization.
+            ros::Duration(0.5).sleep();
+            
+            // Use the SURF-based image pipeline to get a template match.
+            int tagID = imagePipeline.getTemplateID(boxes);
+            ROS_INFO("Detected tag %d for object %zu, view %zu", tagID, i, j);
+            detections.push_back(tagID);
         }
-        ros::Duration(0.5).sleep();  // Brief stabilization.
         
-        // Use SURF-based image processing to detect the tag.
-        int tagID = imagePipeline.getTemplateID(boxes);
-        ROS_INFO("Detected tag %d for object %zu", tagID, i);
-        detectedTags[i] = tagID;
+        // For this object, choose the "straight-on" detection (view index 0) if valid.
+        int finalTagID = detections[0];
+        if(finalTagID == -1) {
+            // Otherwise, if one of the side views is valid, use it.
+            if(detections[1] != -1)
+                finalTagID = detections[1];
+            else if(detections[2] != -1)
+                finalTagID = detections[2];
+        }
+        
+        // Map the finalTagID to a tag name.
+        std::string tagName = getTagName(finalTagID);
+        
+        // If this tag was seen before, mark it as duplicate.
+        bool duplicate = false;
+        for (const auto &name : seenTags) {
+            if (name == tagName && tagName != "Blank") {
+                duplicate = true;
+                break;
+            }
+        }
+        if (tagName != "Blank" && !duplicate) {
+            seenTags.push_back(tagName);
+        }
+        
+        finalResults[i] = tagName + (duplicate ? " -> duplicate" : "");
     }
     
-    ROS_INFO("Returning to starting position (%.2f, %.2f, %.2f deg)...", startX, startY, RAD2DEG(startPhi));
+    // Return to starting position.
+    ROS_INFO("Returning to starting position (%.2f, %.2f, %.2f deg)...", startX, startY, startPhi_deg);
     waitForConvergence(robotPose);
-    if (!Navigation::moveToGoal(startX, startY, RAD2DEG(startPhi))) {
+    if (!Navigation::moveToGoal(startX, startY, startPhi_deg)) {
         ROS_WARN("Failed to return to starting position.");
     }
     
-    // Write detection results to a file.
+    // Write the detection results to the output file in the required format.
     std::ofstream outfile("contest2_results.txt");
     if (!outfile.is_open()) {
         ROS_ERROR("Could not open output file for writing results.");
     } else {
-        outfile << "Contest 2 Object Detection Results\n";
-        for (size_t i = 0; i < detectedTags.size(); i++) {
-            outfile << "Object " << i << ": ";
-            outfile << ((detectedTags[i] == -1) ? "No tag detected" : "Tag " + std::to_string(detectedTags[i])) << "\n";
+        for (size_t i = 0; i < finalResults.size(); i++) {
+            outfile << "Tag " << finalResults[i] << " : Coordinates " 
+                    << "(" << boxes.coords[i][0] << ", " << boxes.coords[i][1] 
+                    << ", " << boxes.coords[i][2] << ")\n";
         }
         outfile.close();
         ROS_INFO("Results written to contest2_results.txt");
