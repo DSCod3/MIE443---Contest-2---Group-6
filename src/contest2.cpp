@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
 
 
 
-        secondsElapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now()-start).count();
+        secondsElapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now()-start).count();7
     
     }
 
