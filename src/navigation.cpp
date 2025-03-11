@@ -2,6 +2,7 @@
 #include <actionlib/client/simple_action_client.h>
 #include <move_base_msgs/MoveBaseAction.h>
 #include <tf/transform_datatypes.h>
+#include <cmath>
 
 bool Navigation::moveToGoal(float xGoal, float yGoal, float phiGoal){
 	// Set up and wait for actionClient.
@@ -32,4 +33,9 @@ bool Navigation::moveToGoal(float xGoal, float yGoal, float phiGoal){
         ROS_INFO("The robot failed to reach the destination");
         return false;
     }
+}
+
+void offsetCoordinates(float offset, float x, float y, float phi, float &offsetX, float&offsetY){
+    offsetX = x+offset*std::cos(phi);
+    offsetY = y+offset*std::sin(phi);
 }

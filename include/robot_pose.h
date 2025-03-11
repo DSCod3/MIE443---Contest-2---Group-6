@@ -7,6 +7,7 @@ class RobotPose {
 		float x;
 		float y;
 		float phi;
+		float phid;
 	public:
 		RobotPose(float x, float y, float phi);
 		void poseCallback(const geometry_msgs::PoseWithCovarianceStamped& msg);
