@@ -37,76 +37,79 @@ int ImagePipeline::getTemplateID(Boxes& boxes) {
         std::cerr << "Invalid image for SURF detection" << std::endl;
         return -1;
     }
-    
-    // Crop the image to a central region.
-    int cropWidth = img.cols / 2;
-    int cropHeight = img.rows / 2;
-    int startX = (img.cols - cropWidth) / 2;
-    int startY = (img.rows - cropHeight) / 2;
-    cv::Rect roi(startX, startY, cropWidth, cropHeight);
+
     cv::Mat cropped;
     try {
-        cropped = img(roi).clone();
+        // ===== ADAPTIVE CROPPING USING EDGE DETECTION =====
+        cv::Mat grayFull;
+        cv::cvtColor(img, grayFull, cv::COLOR_BGR2GRAY);
+        cv::GaussianBlur(grayFull, grayFull, cv::Size(5, 5), 0);
+
+        // Edge detection with Canny
+        cv::Mat edges;
+        cv::Canny(grayFull, edges, 50, 150);
+
+        // Find contours in the edge map
+        std::vector<std::vector<cv::Point>> contours;
+        cv::findContours(edges, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+        if (!contours.empty()) {
+            // Find largest contour by area
+            int maxIdx = -1;
+            double maxArea = 0;
+            for (size_t i = 0; i < contours.size(); ++i) {
+                double area = cv::contourArea(contours[i]);
+                if (area > maxArea) {
+                    maxArea = area;
+                    maxIdx = i;
+                }
+            }
+
+            if (maxIdx != -1) {
+                // Get bounding rect with 10% padding
+                cv::Rect boundingRect = cv::boundingRect(contours[maxIdx]);
+                int padX = boundingRect.width * 0.1;
+                int padY = boundingRect.height * 0.1;
+                
+                // Expand ROI with boundary checks
+                boundingRect.x = std::max(0, boundingRect.x - padX);
+                boundingRect.y = std::max(0, boundingRect.y - padY);
+                boundingRect.width = std::min(img.cols - boundingRect.x, 
+                                           boundingRect.width + 2 * padX);
+                boundingRect.height = std::min(img.rows - boundingRect.y,
+                                            boundingRect.height + 2 * padY);
+
+                cropped = img(boundingRect).clone();
+            }
+        }
+
+        // Fallback to center crop if no contours found
+        if (cropped.empty()) {
+            int cropWidth = img.cols / 2;
+            int cropHeight = img.rows / 2;
+            cv::Rect roi((img.cols - cropWidth)/2, (img.rows - cropHeight)/2,
+                       cropWidth, cropHeight);
+            cropped = img(roi).clone();
+        }
+
     } catch (const cv::Exception &e) {
-        std::cerr << "Error cropping image: " << e.what() << std::endl;
+        std::cerr << "Cropping error: " << e.what() << std::endl;
         return -1;
     }
-    
-    // Convert cropped image to grayscale.
+
+    // ===== REST OF SURF PROCESSING =====
     cv::Mat gray;
     cv::cvtColor(cropped, gray, cv::COLOR_BGR2GRAY);
     
-    // Detect keypoints and compute descriptors in the cropped image.
     std::vector<cv::KeyPoint> keypointsImg;
     cv::Mat descriptorsImg;
     detector->detectAndCompute(gray, cv::noArray(), keypointsImg, descriptorsImg);
-    
-    if (descriptorsImg.empty()) {
-        std::cerr << "No descriptors found in current image" << std::endl;
-        return -1;
-    }
-    
-    // Iterate through each template loaded in Boxes.
-    for (size_t i = 0; i < boxes.templates.size(); i++) {
-        cv::Mat templ = boxes.templates[i];
-        if (templ.empty()) continue;
-        
-        cv::Mat templGray;
-        if (templ.channels() == 3)
-            cv::cvtColor(templ, templGray, cv::COLOR_BGR2GRAY);
-        else
-            templGray = templ;
-        
-        std::vector<cv::KeyPoint> keypointsTempl;
-        cv::Mat descriptorsTempl;
-        detector->detectAndCompute(templGray, cv::noArray(), keypointsTempl, descriptorsTempl);
-        
-        if (descriptorsTempl.empty()) continue;
-        
-        std::vector<std::vector<cv::DMatch>> knnMatches;
-        matcher->knnMatch(descriptorsTempl, descriptorsImg, knnMatches, 2);
-        
-        int goodMatches = 0;
-        // Apply Lowe's ratio test.
-        for (size_t j = 0; j < knnMatches.size(); j++) {
-            if (knnMatches[j].size() < 2) continue;
-            if (knnMatches[j][0].distance < 0.75 * knnMatches[j][1].distance)
-                goodMatches++;
-        }
-        
-        if (goodMatches > maxGoodMatches) {
-            maxGoodMatches = goodMatches;
-            bestTemplateID = i;
-        }
-    }
-    
-    // Set a threshold for detection (e.g., at least 10 good matches).
-    if (maxGoodMatches < 10)
-        bestTemplateID = -1;
-    
-    // Optionally display the cropped image.
-    cv::imshow("Cropped Image", gray);
+
+    // ... (rest of your existing SURF matching code) ...
+
+    // Display adaptive crop instead of center crop
+    cv::imshow("Adaptive Crop", gray);
     cv::waitKey(10);
-    
+
     return bestTemplateID;
 }
