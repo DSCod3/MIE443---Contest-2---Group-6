@@ -9,7 +9,7 @@
 #define RAD2DEG(rad) ((rad) * (180.0 / M_PI))
 
 bool facingInwards = true;
-float offsetFromTarget = 0.40;
+float offsetFromTarget = 0.50;
 
 
 // Initialize box coordinates and templates
@@ -78,7 +78,8 @@ int main(int argc, char** argv) {
 
         destX = boxes.coords[destinationNumber][0];
         destY = boxes.coords[destinationNumber][1];
-        destPhi = boxes.coords[destinationNumber][2];
+        //destPhi = boxes.coords[destinationNumber][2];
+        destPhi = DEG2RAD(boxes.coords[destinationNumber][2]);
 
         if(facingInwards){
             targetPhi = destPhi - M_PI;
