@@ -21,12 +21,12 @@ public:
     // Returns the index of the best matching template (or -1 if no good match is found).
     int getTemplateID(Boxes& boxes);
 
-    cv::Rect adaptiveCropping() ;
     
     bool isValid;
     cv::Mat img;
     
 private:
+    cv::Rect adaptiveCropping();  // Add this declaration
     image_transport::Subscriber sub;
     cv::Ptr<cv::xfeatures2d::SURF> detector;
     cv::Ptr<cv::BFMatcher> matcher;
