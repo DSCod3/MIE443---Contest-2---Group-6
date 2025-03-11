@@ -11,7 +11,7 @@ bool Navigation::moveToGoal(float xGoal, float yGoal, float phiGoal){
         ROS_INFO("Waiting for the move_base action server to come up");
     }
     // Convert phi from degrees to radians.
-    geometry_msgs::Quaternion phi = tf::createQuaternionMsgFromYaw(-phiGoal * M_PI / 180.0);
+    geometry_msgs::Quaternion phi = tf::createQuaternionMsgFromYaw(phiGoal);
     move_base_msgs::MoveBaseGoal goal;
     goal.target_pose.header.frame_id = "map";
     goal.target_pose.header.stamp = ros::Time::now();

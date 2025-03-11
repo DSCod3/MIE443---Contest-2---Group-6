@@ -16,17 +16,19 @@
 
 // Global movement constants.
 bool facingInwards = true;
-float baseOffset = 0.50;  // Base offset from target (meters)
+float targetX, targetY, targetPhi;
+float destX, destY, destPhi;
+float offsetFromTarget = 0.50;
 
 // Helper function: Computes adjusted goal coordinates based on object's coordinate,
 // by adding 180° to the object's orientation (if needed) then subtracting an offset.
 // Here, we use the object's original orientation (in degrees) to compute the offset.
-void adjustGoalCoordinates(float origX, float origY, float objPhi, float &adjX, float &adjY) {
-    // We use a fixed offset (baseOffset) for now.
-    float phiRad = DEG2RAD(objPhi + 180.0f);
-    adjX = origX + baseOffset * std::cos(phiRad);
-    adjY = origY + baseOffset * std::sin(phiRad);
-}
+// void adjustGoalCoordinates(float origX, float origY, float objPhi, float &adjX, float &adjY) {
+//     // We use a fixed offset (baseOffset) for now.
+//     float phiRad = DEG2RAD(objPhi + 180.0f);
+//     adjX = origX + baseOffset * std::cos(phiRad);
+//     adjY = origY + baseOffset * std::sin(phiRad);
+// }
 
 void offsetCoordinates(float offset, float x, float y, float phi, float &offsetX, float &offsetY){
     offsetX = x+offset*std::cos(phi);
@@ -113,69 +115,51 @@ int main(int argc, char** argv) {
     
     // To detect duplicates, keep track of already seen tag names.
     std::vector<std::string> seenTags;
-
-    float objX;
-    float objY;
-    float objPhi;
-
-    float goalX, goalY;
-    float baseTargetPhi;
     
+    std::vector<int> detections;
+
     // For each object in the coordinate list.
-    for (size_t i = 0; i < boxes.coords.size(); i++) {
+    for (int i = 0; i < boxes.coords.size(); i++) {
         // Get the object's coordinates and orientation.
-        objX = boxes.coords[i][0];
-        objY = boxes.coords[i][1];
-        //float objPhi = boxes.coords[i][2];
-        objPhi = DEG2RAD(boxes.coords[i][2]);  // from myhal_scene.xml (in degrees)
+        destX = boxes.coords[i][0];
+        destY = boxes.coords[i][1];
+        destPhi = boxes.coords[i][2];
+        //destPhi = DEG2RAD(boxes.coords[i][2]);  // from myhal_scene.xml (in degrees)
         
         // Determine the base target orientation.
         if (facingInwards) {
-            // If facing inwards, approach from the opposite side.
-            baseTargetPhi = objPhi - M_PI;
-            while (baseTargetPhi < 2*M_PI){
-                baseTargetPhi += 2*M_PI;}
-        } else {
-            baseTargetPhi = objPhi;
+            targetPhi = destPhi - M_PI;
+            while(targetPhi < -2*M_PI){
+                targetPhi += 2*M_PI;
+            }
+        }
+        else{
+            targetPhi = destPhi;
         }
         
-        ROS_INFO("Processing object %zu: (%.2f, %.2f, %.2f deg)", i, objX, objY, RAD2DEG(objPhi));
-        
-        // We'll take 3 images: one straight on, one with +30° offset, one with -30° offset.
-        // We'll store the detection results.
-        std::vector<int> detections;
-        std::vector<float> angleOffsets = {DEG2RAD(0.0), DEG2RAD(30.0), DEG2RAD(-30.0)};
-        for (size_t j = 0; j < 1; j++) {
-            //float currentGoalPhi = objPhi + angleOffsets[j];
-            // Normalize angle.
-            //while (currentGoalPhi > M_PI) currentGoalPhi -= 2*M_PI;
-            //while (currentGoalPhi < -M_PI) currentGoalPhi += 2*M_PI;
-            
-            // Compute an adjusted goal position using a helper that uses the object's original orientation.
-            // Use the original object's orientation (objPhi_deg) for offset calculation.
-            // (Assumes that adding 180° in adjustGoalCoordinates is done inside that function.)
-            offsetCoordinates(baseOffset, objX, objY, objPhi, goalX, goalY);
-            
-            ROS_INFO("Moving to object %zu, view %zu at goal (%.2f, %.2f, %.2f deg)", 
-                     i, j, goalX, goalY, RAD2DEG(baseTargetPhi));
-            
-            // Wait for convergence before sending the goal.
-            waitForConvergence(robotPose);
+        //ROS_INFO("Processing object %zu: (%.2f, %.2f, %.2f deg)", i, objX, objY, RAD2DEG(objPhi));
+        ROS_INFO("V-------------------------------V");
+        ROS_INFO("Moving to destination at %u at x/y/phi: %.2f/%.2f/%.2f", i, destX, destY, RAD2DEG(destPhi));
+
+        offsetCoordinates(offsetFromTarget, destX, destY, destPhi, targetX, targetY);
+        ROS_INFO("Adjusted position x/y/phi: %.2f/%.2f/%.2f", targetX, targetY, RAD2DEG(targetPhi));
             
             // Send the goal using the Navigation module.
-            if (!Navigation::moveToGoal(goalX, goalY, baseTargetPhi)) {
-                ROS_WARN("Failed to reach object %zu, view %zu. Skipping this view.", i, j);
-                detections.push_back(-1);
-                continue;
-            }
-            // Allow brief stabilization.
-            ros::Duration(0.5).sleep();
-            
-            // Use the SURF-based image pipeline to get a template match.
-            int tagID = imagePipeline.getTemplateID(boxes);
-            ROS_INFO("Detected tag %d for object %zu, view %zu", tagID, i, j);
-            detections.push_back(tagID);
+        if (!Navigation::moveToGoal(targetX, targetY, targetPhi)) {
+            ROS_INFO("moveToGoal() error.");
+            detections.push_back(-1);
+            continue;
         }
+        else{
+            ROS_INFO("Destination reached!");
+        }
+        // Allow brief stabilization.
+        ros::Duration(0.5).sleep();
+        
+        // Use the SURF-based image pipeline to get a template match.
+        int tagID = imagePipeline.getTemplateID(boxes);
+        ROS_INFO("Detected tag %d for object %u", tagID, i);
+        detections.push_back(tagID);
         
         // For this object, choose the "straight-on" detection (view index 0) if valid.
         int finalTagID = detections[0];
@@ -217,7 +201,7 @@ int main(int argc, char** argv) {
     if (!outfile.is_open()) {
         ROS_ERROR("Could not open output file for writing results.");
     } else {
-        for (size_t i = 0; i < finalResults.size(); i++) {
+        for (int i = 0; i < finalResults.size(); i++) {
             outfile << "Tag " << finalResults[i] << " : Coordinates " 
                     << "(" << boxes.coords[i][0] << ", " << boxes.coords[i][1] 
                     << ", " << boxes.coords[i][2] << ")\n";
