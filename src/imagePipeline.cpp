@@ -105,7 +105,49 @@ int ImagePipeline::getTemplateID(Boxes& boxes) {
     cv::Mat descriptorsImg;
     detector->detectAndCompute(gray, cv::noArray(), keypointsImg, descriptorsImg);
 
-    // ... (rest of your existing SURF matching code) ...
+   //compare image code
+    if (descriptorsImg.empty()) {
+        std::cerr << "No descriptors found in current image" << std::endl;
+        return -1;
+    }
+    
+    // Iterate through each template loaded in Boxes.
+    for (size_t i = 0; i < boxes.templates.size(); i++) {
+        cv::Mat templ = boxes.templates[i];
+        if (templ.empty()) continue;
+        
+        cv::Mat templGray;
+        if (templ.channels() == 3)
+            cv::cvtColor(templ, templGray, cv::COLOR_BGR2GRAY);
+        else
+            templGray = templ;
+        
+        std::vector<cv::KeyPoint> keypointsTempl;
+        cv::Mat descriptorsTempl;
+        detector->detectAndCompute(templGray, cv::noArray(), keypointsTempl, descriptorsTempl);
+        
+        if (descriptorsTempl.empty()) continue;
+        
+        std::vector<std::vector<cv::DMatch>> knnMatches;
+        matcher->knnMatch(descriptorsTempl, descriptorsImg, knnMatches, 2);
+        
+        int goodMatches = 0;
+        // Apply Lowe's ratio test.
+        for (size_t j = 0; j < knnMatches.size(); j++) {
+            if (knnMatches[j].size() < 2) continue;
+            if (knnMatches[j][0].distance < 0.75 * knnMatches[j][1].distance)
+                goodMatches++;
+        }
+        
+        if (goodMatches > maxGoodMatches) {
+            maxGoodMatches = goodMatches;
+            bestTemplateID = i;
+        }
+    }
+    
+    // Set a threshold for detection (e.g., at least 10 good matches).
+    if (maxGoodMatches < 10)
+        bestTemplateID = -1;
 
     // Display adaptive crop instead of center crop
     cv::imshow("Adaptive Crop", gray);

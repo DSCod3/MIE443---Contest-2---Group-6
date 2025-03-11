@@ -24,8 +24,13 @@ float baseOffset = 0.50;  // Base offset from target (meters)
 void adjustGoalCoordinates(float origX, float origY, float objPhi, float &adjX, float &adjY) {
     // We use a fixed offset (baseOffset) for now.
     float phiRad = DEG2RAD(objPhi + 180.0f);
-    adjX = origX - baseOffset * std::cos(phiRad);
-    adjY = origY - baseOffset * std::sin(phiRad);
+    adjX = origX + baseOffset * std::cos(phiRad);
+    adjY = origY + baseOffset * std::sin(phiRad);
+}
+
+void offsetCoordinates(float offset, float x, float y, float phi, float &offsetX, float &offsetY){
+    offsetX = x+offset*std::cos(phi);
+    offsetY = y+offset*std::sin(phi);
 }
 
 // Wait for AMCL convergence: repeatedly check that the robot's pose is nearly constant.
@@ -101,58 +106,64 @@ int main(int argc, char** argv) {
     // Record starting pose.
     float startX = robotPose.x;
     float startY = robotPose.y;
-    float startPhi_deg = RAD2DEG(robotPose.phi);  // convert to degrees
+    float startPhi = robotPose.phi;  // convert to degrees
     
     // Vector for storing final detection results (one per object).
     std::vector<std::string> finalResults(boxes.coords.size(), "Blank");
     
     // To detect duplicates, keep track of already seen tag names.
     std::vector<std::string> seenTags;
+
+    float objX;
+    float objY;
+    float objPhi;
+
+    float goalX, goalY;
+    float baseTargetPhi;
     
     // For each object in the coordinate list.
     for (size_t i = 0; i < boxes.coords.size(); i++) {
         // Get the object's coordinates and orientation.
-        float objX = boxes.coords[i][0];
-        float objY = boxes.coords[i][1];
-        float objPhi_deg = boxes.coords[i][2];  // from myhal_scene.xml (in degrees)
+        objX = boxes.coords[i][0];
+        objY = boxes.coords[i][1];
+        //float objPhi = boxes.coords[i][2];
+        objPhi = DEG2RAD(boxes.coords[i][2]);  // from myhal_scene.xml (in degrees)
         
         // Determine the base target orientation.
-        float baseTargetPhi_deg;
         if (facingInwards) {
             // If facing inwards, approach from the opposite side.
-            baseTargetPhi_deg = objPhi_deg + 180.0f;
-            if (baseTargetPhi_deg >= 360.0f)
-                baseTargetPhi_deg -= 360.0f;
+            baseTargetPhi = objPhi - M_PI;
+            while (baseTargetPhi < 2*M_PI){
+                baseTargetPhi += 2*M_PI;}
         } else {
-            baseTargetPhi_deg = objPhi_deg;
+            baseTargetPhi = objPhi;
         }
         
-        ROS_INFO("Processing object %zu: (%.2f, %.2f, %.2f deg)", i, objX, objY, objPhi_deg);
+        ROS_INFO("Processing object %zu: (%.2f, %.2f, %.2f deg)", i, objX, objY, RAD2DEG(objPhi));
         
         // We'll take 3 images: one straight on, one with +30° offset, one with -30° offset.
         // We'll store the detection results.
         std::vector<int> detections;
-        std::vector<float> angleOffsets = {0.0, 30.0, -30.0};
-        for (size_t j = 0; j < angleOffsets.size(); j++) {
-            float currentGoalPhi_deg = baseTargetPhi_deg + angleOffsets[j];
+        std::vector<float> angleOffsets = {DEG2RAD(0.0), DEG2RAD(30.0), DEG2RAD(-30.0)};
+        for (size_t j = 0; j < 1; j++) {
+            //float currentGoalPhi = objPhi + angleOffsets[j];
             // Normalize angle.
-            while (currentGoalPhi_deg >= 360.0f) currentGoalPhi_deg -= 360.0f;
-            while (currentGoalPhi_deg < 0.0f) currentGoalPhi_deg += 360.0f;
+            //while (currentGoalPhi > M_PI) currentGoalPhi -= 2*M_PI;
+            //while (currentGoalPhi < -M_PI) currentGoalPhi += 2*M_PI;
             
             // Compute an adjusted goal position using a helper that uses the object's original orientation.
-            float goalX, goalY;
             // Use the original object's orientation (objPhi_deg) for offset calculation.
             // (Assumes that adding 180° in adjustGoalCoordinates is done inside that function.)
-            adjustGoalCoordinates(objX, objY, objPhi_deg, goalX, goalY);
+            offsetCoordinates(baseOffset, objX, objY, objPhi, goalX, goalY);
             
             ROS_INFO("Moving to object %zu, view %zu at goal (%.2f, %.2f, %.2f deg)", 
-                     i, j, goalX, goalY, currentGoalPhi_deg);
+                     i, j, goalX, goalY, RAD2DEG(baseTargetPhi));
             
             // Wait for convergence before sending the goal.
             waitForConvergence(robotPose);
             
             // Send the goal using the Navigation module.
-            if (!Navigation::moveToGoal(goalX, goalY, currentGoalPhi_deg)) {
+            if (!Navigation::moveToGoal(goalX, goalY, baseTargetPhi)) {
                 ROS_WARN("Failed to reach object %zu, view %zu. Skipping this view.", i, j);
                 detections.push_back(-1);
                 continue;
@@ -195,9 +206,9 @@ int main(int argc, char** argv) {
     }
     
     // Return to starting position.
-    ROS_INFO("Returning to starting position (%.2f, %.2f, %.2f deg)...", startX, startY, startPhi_deg);
+    ROS_INFO("Returning to starting position (%.2f, %.2f, %.2f deg)...", startX, startY, RAD2DEG(startPhi));
     waitForConvergence(robotPose);
-    if (!Navigation::moveToGoal(startX, startY, startPhi_deg)) {
+    if (!Navigation::moveToGoal(startX, startY, startPhi)) {
         ROS_WARN("Failed to return to starting position.");
     }
     
