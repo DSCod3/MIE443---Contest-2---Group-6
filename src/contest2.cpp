@@ -78,8 +78,8 @@ int main(int argc, char** argv) {
 
         destX = boxes.coords[destinationNumber][0];
         destY = boxes.coords[destinationNumber][1];
-        //destPhi = boxes.coords[destinationNumber][2];
-        destPhi = DEG2RAD(boxes.coords[destinationNumber][2]);
+        destPhi = boxes.coords[destinationNumber][2];
+        //destPhi = DEG2RAD(boxes.coords[destinationNumber][2]);
 
         if(facingInwards){
             targetPhi = destPhi - M_PI;
