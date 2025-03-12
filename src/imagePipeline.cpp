@@ -5,6 +5,7 @@
 #include <opencv2/xfeatures2d.hpp>
 #include <opencv2/features2d.hpp>
 #include <iostream>
+#include <fstream>  // Added for file output
 
 #define IMAGE_TYPE sensor_msgs::image_encodings::BGR8
 #define IMAGE_TOPIC "camera/rgb/image_raw"
@@ -227,6 +228,19 @@ int ImagePipeline::getTemplateID(Boxes& boxes) {
             bestMatch = i;
         }
     }
-
-    return (maxMatches >= MIN_MATCHES) ? bestMatch : -1;
+    
+    // 输出匹配结果到txt文件，使用追加模式，不覆盖之前的内容
+    std::ofstream outFile("output.txt", std::ios::app);
+    if (outFile.is_open()) {
+        if (maxMatches < 50) {
+            outFile << "blank" << std::endl;
+        } else {
+            outFile << bestMatch << std::endl;
+        }
+        outFile.close();
+    } else {
+        std::cerr << "Failed to open output.txt for writing" << std::endl;
+    }
+    
+    return (maxMatches >= 50) ? bestMatch : -1;
 }

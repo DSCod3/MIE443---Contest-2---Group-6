@@ -62,7 +62,7 @@ int main(int argc, char** argv) {
         ros::spinOnce();
         // Use: boxes.coords
         // Use: robotPose.x, robotPose.y, robotPose.phi
-        imagePipeline.getTemplateID(boxes);
+        
         ros::Duration(0.01).sleep();
 
 
@@ -107,7 +107,7 @@ int main(int argc, char** argv) {
             ROS_INFO("Destination reached!");
             ros::Duration(5).sleep();
             destinationNumber++;
-
+            imagePipeline.getTemplateID(boxes);
             if(destinationNumber > boxes.coords.size()){
                 break;
             }
