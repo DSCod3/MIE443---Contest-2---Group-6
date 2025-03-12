@@ -229,18 +229,5 @@ int ImagePipeline::getTemplateID(Boxes& boxes) {
         }
     }
     
-    // 输出匹配结果到txt文件，使用追加模式，不覆盖之前的内容
-    std::ofstream outFile("output.txt", std::ios::app);
-    if (outFile.is_open()) {
-        if (maxMatches < 50) {
-            outFile << "blank" << std::endl;
-        } else {
-            outFile << bestMatch << std::endl;
-        }
-        outFile.close();
-    } else {
-        std::cerr << "Failed to open output.txt for writing" << std::endl;
-    }
-    
     return (maxMatches >= 50) ? bestMatch : -1;
 }
