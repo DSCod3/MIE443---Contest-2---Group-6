@@ -191,43 +191,42 @@ int ImagePipeline::getTemplateID(Boxes& boxes) {
         std::vector<std::vector<cv::DMatch>> matches;
         matcher->knnMatch(descTemplate, descImage, matches, 2);
         
-        int goodMatches = 0;
-        for (auto& m : matches) {
-            if (m.size() < 2) continue;
-            if (m[0].distance < 0.7 * m[1].distance) {
-                ++goodMatches;
+        std::vector<cv::DMatch> validMatches;
+        for (const auto& m : matches) {
+            if (m.size() >= 2 && m[0].distance < 0.7 * m[1].distance) {
+                if (m[0].queryIdx >= 0 && m[0].queryIdx < kpTemplate.size() &&
+                    m[0].trainIdx >= 0 && m[0].trainIdx < kpImage.size()) {
+                    validMatches.push_back(m[0]);
+                }
             }
         }
 
         // 反向验证
         matcher->knnMatch(descImage, descTemplate, matches, 2);
-        for (auto& m : matches) {
-            if (m.size() < 2) continue;
-            if (m[0].distance < 0.7 * m[1].distance) {
-                ++goodMatches;
+        for (const auto& m : matches) {
+            if (m.size() >= 2 && m[0].distance < 0.7 * m[1].distance) {
+                if (m[0].queryIdx >= 0 && m[0].queryIdx < kpImage.size() &&
+                    m[0].trainIdx >= 0 && m[0].trainIdx < kpTemplate.size()) {
+                    validMatches.push_back(cv::DMatch(m[0].trainIdx, m[0].queryIdx, m[0].distance));
+                }
             }
         }
 
         // 调试：显示每个模板的匹配结果
-        if (DEBUG_MODE) {
-            std::vector<cv::DMatch> goodMatchesVec;
-            for (auto& m : matches) {
-                if (m.size() >= 2 && m[0].distance < 0.7 * m[1].distance) {
-                    goodMatchesVec.push_back(m[0]);
-                }
-            }
+        if (DEBUG_MODE && !validMatches.empty()) {
             cv::Mat matchImg;
-            cv::drawMatches(templGray, kpTemplate, gray, kpImage, goodMatchesVec, matchImg);
-            cv::putText(matchImg, "Template " + std::to_string(i) + " Matches: " + std::to_string(goodMatches),
+            cv::drawMatches(templGray, kpTemplate, gray, kpImage, validMatches, matchImg);
+            cv::putText(matchImg, "Template " + std::to_string(i) + " Matches: " + std::to_string(validMatches.size()),
                         cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 255, 0), 2);
             cv::imshow("Template Matches", matchImg);
             cv::waitKey(10);
         }
 
-        if (goodMatches > maxMatches && goodMatches >= MIN_MATCHES) {
-            maxMatches = goodMatches;
+        if (validMatches.size() > maxMatches && validMatches.size() >= MIN_MATCHES) {
+            maxMatches = validMatches.size();
             bestMatch = i;
         }
     }
+
     return (maxMatches >= MIN_MATCHES) ? bestMatch : -1;
 }
