@@ -38,23 +38,28 @@ void ImagePipeline::imageCallback(const sensor_msgs::ImageConstPtr& msg) {
 cv::Rect ImagePipeline::adaptiveCropping() {
     cv::Mat processingImg = img.clone();
     
-    // 阶段1：预处理
+    // Stage 1: Preprocessing
     cv::Mat gray, blurred;
     cv::cvtColor(processingImg, gray, cv::COLOR_BGR2GRAY);
     
-    // 自适应高斯模糊
+    // Adaptive Gaussian blur
     int blurKernel = static_cast<int>(gray.cols * 0.005) | 1;
     blurKernel = std::max(3, std::min(blurKernel, 11));
     cv::GaussianBlur(gray, blurred, cv::Size(blurKernel, blurKernel), 0);
 
-    // 阶段2：动态边缘检测
-    double medVal = cv::median(blurred);
+    // Stage 2: Dynamic edge detection
+    // Custom median calculation
+    cv::Mat flat;
+    blurred.reshape(1, 1).copyTo(flat); // Flatten the image into a single row
+    cv::sort(flat, flat, cv::SORT_ASCENDING); // Sort the flattened array
+    double medVal = flat.at<uchar>(flat.total() / 2); // Get the middle value
+
     double lowerThresh = std::max(0.0, 0.67 * medVal);
     double upperThresh = std::min(255.0, 1.33 * medVal);
     cv::Mat edges;
     cv::Canny(blurred, edges, lowerThresh, upperThresh);
 
-    // 阶段3：智能轮廓分析
+    // Stage 3: Contour analysis
     std::vector<std::vector<cv::Point>> contours;
     cv::findContours(edges, contours, cv::RETR_LIST, cv::CHAIN_APPROX_SIMPLE);
 
@@ -64,20 +69,20 @@ cv::Rect ImagePipeline::adaptiveCropping() {
     for (const auto& contour : contours) {
         cv::Rect rect = cv::boundingRect(contour);
         
-        // 面积过滤
+        // Area filtering
         double areaRatio = cv::contourArea(contour) / (gray.cols * gray.rows);
         if (areaRatio < MIN_AREA_RATIO || areaRatio > MAX_AREA_RATIO) continue;
 
-        // 宽高比过滤
+        // Aspect ratio filtering
         double aspect = static_cast<double>(rect.width) / rect.height;
         if (aspect < MIN_ASPECT_RATIO || aspect > MAX_ASPECT_RATIO) continue;
 
-        // 位置评分
+        // Position scoring
         cv::Point center(rect.x + rect.width/2, rect.y + rect.height/2);
         double centerDist = cv::norm(center - cv::Point(gray.cols/2, gray.rows/2));
         double positionScore = 1.0 - (centerDist / (gray.cols * 0.5));
 
-        // 综合评分
+        // Total score
         double totalScore = (CENTER_WEIGHT * positionScore) + 
                           ((1 - CENTER_WEIGHT) * areaRatio);
 
@@ -87,18 +92,17 @@ cv::Rect ImagePipeline::adaptiveCropping() {
         }
     }
 
-    // 阶段4：动态调整ROI
+    // Stage 4: Dynamic ROI adjustment
     if (maxScore > 0.3 && !bestROI.empty()) {
-        // 根据目标尺寸计算填充比例
         double sizeFactor = static_cast<double>(bestROI.area()) / img.size().area();
-        double padding = 0.1 + 0.15 * (1.0 - sizeFactor);  // 小目标更多填充
+        double padding = 0.1 + 0.15 * (1.0 - sizeFactor);
 
         bestROI.x -= bestROI.width * padding;
         bestROI.y -= bestROI.height * padding;
         bestROI.width *= (1 + 2 * padding);
         bestROI.height *= (1 + 2 * padding);
 
-        // 边界约束
+        // Boundary constraints
         bestROI.x = std::max(0, bestROI.x);
         bestROI.y = std::max(0, bestROI.y);
         bestROI.width = std::min(img.cols - bestROI.x, bestROI.width);
@@ -107,7 +111,7 @@ cv::Rect ImagePipeline::adaptiveCropping() {
         return bestROI;
     }
 
-    // 阶段5：回退策略 - 多级中心裁剪
+    // Stage 5: Fallback strategy
     const std::vector<double> cropRatios{0.7, 0.5, 0.3};
     for (double ratio : cropRatios) {
         int size = static_cast<int>(img.cols * ratio);
@@ -116,10 +120,10 @@ cv::Rect ImagePipeline::adaptiveCropping() {
         cv::Mat testCrop = img(roi);
         std::vector<cv::KeyPoint> kp;
         detector->detect(testCrop, kp);
-        if (kp.size() > 15) return roi;  // 找到足够特征点
+        if (kp.size() > 15) return roi;
     }
 
-    // 最终回退：全图中心50%
+    // Final fallback: center 50%
     return cv::Rect(
         img.cols/4, img.rows/4, 
         img.cols/2, img.rows/2
