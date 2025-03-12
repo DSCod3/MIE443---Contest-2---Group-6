@@ -169,7 +169,7 @@ int ImagePipeline::getTemplateID(Boxes& boxes) {
     // 模板匹配优化
     int bestMatch = -1;
     int maxMatches = 0;
-    const int MIN_MATCHES = 15;  // 提高匹配阈值
+    const int MIN_MATCHES = 15;
 
     for (size_t i = 0; i < boxes.templates.size(); ++i) {
         if (boxes.templates[i].empty()) continue;
@@ -208,25 +208,26 @@ int ImagePipeline::getTemplateID(Boxes& boxes) {
             }
         }
 
+        // 调试：显示每个模板的匹配结果
+        if (DEBUG_MODE) {
+            std::vector<cv::DMatch> goodMatchesVec;
+            for (auto& m : matches) {
+                if (m.size() >= 2 && m[0].distance < 0.7 * m[1].distance) {
+                    goodMatchesVec.push_back(m[0]);
+                }
+            }
+            cv::Mat matchImg;
+            cv::drawMatches(templGray, kpTemplate, gray, kpImage, goodMatchesVec, matchImg);
+            cv::putText(matchImg, "Template " + std::to_string(i) + " Matches: " + std::to_string(goodMatches),
+                        cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 255, 0), 2);
+            cv::imshow("Template Matches", matchImg);
+            cv::waitKey(10);
+        }
+
         if (goodMatches > maxMatches && goodMatches >= MIN_MATCHES) {
             maxMatches = goodMatches;
             bestMatch = i;
         }
     }
-
-    // 调试显示
-    if (DEBUG_MODE) {
-        cv::Mat display;
-        cv::cvtColor(gray, display, cv::COLOR_GRAY2BGR);
-        cv::rectangle(display, cv::Point(0,0), 
-                     cv::Point(display.cols-1, display.rows-1),
-                     cv::Scalar(0,255,0), 2);
-        cv::putText(display, "Matches: " + std::to_string(maxMatches),
-                   cv::Point(10,30), cv::FONT_HERSHEY_SIMPLEX, 0.8,
-                   cv::Scalar(0,0,255), 2);
-        cv::imshow("Debug View", display);
-        cv::waitKey(10);
-    }
-
     return (maxMatches >= MIN_MATCHES) ? bestMatch : -1;
 }
