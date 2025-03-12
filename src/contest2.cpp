@@ -10,32 +10,32 @@
 #include <ros/spinner.h>
 #include <cmath>
 
-// Macros for conversion.
 #define DEG2RAD(deg) ((deg) * (M_PI / 180.0))
 #define RAD2DEG(rad) ((rad) * (180.0 / M_PI))
 
-// Global movement constants.
+// Global settings
 bool facingInwards = true;
-float targetX, targetY, targetPhi;
-float destX, destY, destPhi;
-float offsetFromTarget = 0.50;
+float offsetFromTarget = 0.50;  // Offset from target (meters)
 
-// Helper function: Computes adjusted goal coordinates based on object's coordinate,
-// by adding 180° to the object's orientation (if needed) then subtracting an offset.
-// Here, we use the object's original orientation (in degrees) to compute the offset.
-// void adjustGoalCoordinates(float origX, float origY, float objPhi, float &adjX, float &adjY) {
-//     // We use a fixed offset (baseOffset) for now.
-//     float phiRad = DEG2RAD(objPhi + 180.0f);
-//     adjX = origX + baseOffset * std::cos(phiRad);
-//     adjY = origY + baseOffset * std::sin(phiRad);
-// }
+// Global variables for destination indexing
+uint8_t destinationNumber = 0;
+float targetX;
+float targetY;
+float targetPhi;
+float destX;
+float destY;
+float destPhi;
+uint64_t timeReference = 0;
 
-void offsetCoordinates(float offset, float x, float y, float phi, float &offsetX, float &offsetY){
-    offsetX = x+offset*std::cos(phi);
-    offsetY = y+offset*std::sin(phi);
+// Helper function: Offsets the coordinates by a fixed offset along the object's orientation.
+// (Original Chinese comment: "计算偏移后的坐标" -> "Calculate offset coordinates")
+void offsetCoordinates(float offset, float x, float y, float phi, float &offsetX, float &offsetY) {
+    offsetX = x + offset * std::cos(phi);
+    offsetY = y + offset * std::sin(phi);
 }
 
-// Wait for AMCL convergence: repeatedly check that the robot's pose is nearly constant.
+// Wait for AMCL convergence by ensuring that the robot’s pose remains nearly constant over a short time.
+// (Chinese: "等待AMCL收敛" -> "Wait for AMCL convergence")
 void waitForConvergence(RobotPose &robotPose) {
     ros::Rate rate(10);
     float prevX = robotPose.x, prevY = robotPose.y, prevPhi = robotPose.phi;
@@ -73,144 +73,159 @@ std::string getTagName(int templateID) {
 }
 
 int main(int argc, char** argv) {
+    // Setup ROS.
     ros::init(argc, argv, "contest2");
     ros::NodeHandle n;
-    
-    // Use AsyncSpinner for concurrent callbacks.
+
+    // Clear the results file (overwrite old file each run).
+    std::ofstream clearFile("contest.txt", std::ios::trunc);
+    clearFile.close();
+
+    // Use an AsyncSpinner for concurrent callback processing.
     ros::AsyncSpinner spinner(4);
     spinner.start();
-    
-    // Subscribe to AMCL pose updates.
+
+    // Create RobotPose object and subscribe to AMCL pose updates.
     RobotPose robotPose(0, 0, 0);
     ros::Subscriber amclSub = n.subscribe("/amcl_pose", 1, &RobotPose::poseCallback, &robotPose);
-    
-    // Wait for an initial pose estimate.
-    ros::Rate waitRate(10);
-    while (ros::ok() && !robotPose.pose_received) {
-        ROS_WARN("Waiting for initial pose estimate. Please use RViz's '2D Pose Estimate' tool.");
-        waitRate.sleep();
-    }
-    ros::Duration(2.0).sleep(); // Allow costmaps to stabilize.
-    ROS_INFO("Initial pose: (%.2f, %.2f, %.2f)", robotPose.x, robotPose.y, robotPose.phi);
-    
+
     // Load object coordinates and template images.
-    Boxes boxes;
+    Boxes boxes; 
     if (!boxes.load_coords() || !boxes.load_templates()) {
-        std::cerr << "ERROR: could not load coordinates or templates" << std::endl;
+        std::cout << "ERROR: could not load coords or templates" << std::endl;
         return -1;
     }
     std::cout << "Loaded " << boxes.coords.size() << " object coordinates." << std::endl;
-    
-    // Initialize Navigation and ImagePipeline modules.
-    // Note: Navigation::moveToGoal expects orientation in degrees.
+    for (int i = 0; i < boxes.coords.size(); ++i) {
+        ROS_INFO("Object %d: x=%.2f, y=%.2f, φ=%.2f deg", i, boxes.coords[i][0], boxes.coords[i][1], boxes.coords[i][2]);
+    }
+
+    // Initialize ImagePipeline.
     ImagePipeline imagePipeline(n);
-    
-    // Record starting pose.
+
+    // Timer setup.
+    std::chrono::time_point<std::chrono::system_clock> startTime = std::chrono::system_clock::now();
+    uint64_t secondsElapsed = 0;
+    uint64_t reportingInterval = 1;
+    uint64_t lastReportTimestamp = 0;
+
+    // Map to keep track of results per destination.
+    std::vector<std::string> finalResults(boxes.coords.size(), "Blank");
+
+    // Map to count occurrences of each template.
+    std::map<int, int> templateCounts;
+
+    // Wait for initial pose estimate.
+    ros::Rate loopRate(10);
+    while (ros::ok() && !robotPose.pose_received) {
+        ROS_WARN("Waiting for initial pose estimate. Please use RViz's '2D Pose Estimate' tool.");
+        loopRate.sleep();
+    }
+    ros::Duration(2.0).sleep();
+    ROS_INFO("Initial pose: (%.2f, %.2f, %.2f)", robotPose.x, robotPose.y, robotPose.phi);
+
+    // Record starting position.
     float startX = robotPose.x;
     float startY = robotPose.y;
-    float startPhi = robotPose.phi;  // convert to degrees
-    
-    // Vector for storing final detection results (one per object).
-    std::vector<std::string> finalResults(boxes.coords.size(), "Blank");
-    
-    // To detect duplicates, keep track of already seen tag names.
-    std::vector<std::string> seenTags;
-    
-    std::vector<int> detections;
+    float startPhi_deg = RAD2DEG(robotPose.phi);
 
-    // For each object in the coordinate list.
-    for (int i = 0; i < boxes.coords.size(); i++) {
-        // Get the object's coordinates and orientation.
-        destX = boxes.coords[i][0];
-        destY = boxes.coords[i][1];
-        destPhi = boxes.coords[i][2];
-        //destPhi = DEG2RAD(boxes.coords[i][2]);  // from myhal_scene.xml (in degrees)
-        
-        // Determine the base target orientation.
+    // Execute strategy: iterate through each destination.
+    while (ros::ok() && secondsElapsed <= 300 && destinationNumber < boxes.coords.size()) {
+        // Update timer.
+        secondsElapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now() - startTime).count();
+
+        // Get destination from Boxes.
+        destX = boxes.coords[destinationNumber][0];
+        destY = boxes.coords[destinationNumber][1];
+        // For myhal_scene.xml, φ is in degrees; convert to radians.
+        destPhi = DEG2RAD(boxes.coords[destinationNumber][2]);
+
+        // Compute target orientation.
+        float targetPhi;
         if (facingInwards) {
-            targetPhi = destPhi - M_PI;
-            while(targetPhi < -2*M_PI){
-                targetPhi += 2*M_PI;
+            targetPhi = destPhi - M_PI;  // subtract 180° (in radians)
+            while (targetPhi < -2 * M_PI) {
+                targetPhi += 2 * M_PI;
             }
-        }
-        else{
+        } else {
             targetPhi = destPhi;
         }
-        
-        //ROS_INFO("Processing object %zu: (%.2f, %.2f, %.2f deg)", i, objX, objY, RAD2DEG(objPhi));
-        ROS_INFO("V-------------------------------V");
-        ROS_INFO("Moving to destination at %u at x/y/phi: %.2f/%.2f/%.2f", i, destX, destY, RAD2DEG(destPhi));
 
+        ROS_INFO("------------------------------------------------");
+        ROS_INFO("Moving to destination %d at x=%.2f, y=%.2f, φ=%.2f deg", destinationNumber, destX, destY, RAD2DEG(destPhi));
+
+        // Compute adjusted goal using offsetCoordinates.
         offsetCoordinates(offsetFromTarget, destX, destY, destPhi, targetX, targetY);
-        ROS_INFO("Adjusted position x/y/phi: %.2f/%.2f/%.2f", targetX, targetY, RAD2DEG(targetPhi));
-            
-            // Send the goal using the Navigation module.
-        if (!Navigation::moveToGoal(targetX, targetY, targetPhi)) {
-            ROS_INFO("moveToGoal() error.");
-            detections.push_back(-1);
+        ROS_INFO("Adjusted goal: (%.2f, %.2f) with target φ=%.2f deg", targetX, targetY, RAD2DEG(targetPhi));
+
+        // Wait for AMCL convergence.
+        waitForConvergence(robotPose);
+
+        // Send goal using Navigation module.
+        if (!Navigation::moveToGoal(targetX, targetY, RAD2DEG(targetPhi))) {
+            ROS_INFO("moveToGoal error for destination %d.", destinationNumber);
+            destinationNumber++;
             continue;
+        } else {
+            ROS_INFO("Destination %d reached!", destinationNumber);
+            ros::Duration(5.0).sleep();  // Pause for stabilization and image capture.
+            destinationNumber++;
         }
-        else{
-            ROS_INFO("Destination reached!");
+
+        // Use SURF-based image processing to detect the tag.
+        int templateID = imagePipeline.getTemplateID(boxes);
+        if (templateID != -1) {
+            templateCounts[templateID]++; // Update global count
+            ROS_INFO("Detected template %d at destination %d", templateID, destinationNumber - 1);
+        } else {
+            ROS_INFO("No template detected at destination %d", destinationNumber - 1);
         }
-        // Allow brief stabilization.
-        ros::Duration(0.5).sleep();
-        
-        // Use the SURF-based image pipeline to get a template match.
-        int tagID = imagePipeline.getTemplateID(boxes);
-        ROS_INFO("Detected tag %d for object %u", tagID, i);
-        detections.push_back(tagID);
-        
-        // For this object, choose the "straight-on" detection (view index 0) if valid.
-        int finalTagID = detections[0];
-        if(finalTagID == -1) {
-            // Otherwise, if one of the side views is valid, use it.
-            if(detections[1] != -1)
-                finalTagID = detections[1];
-            else if(detections[2] != -1)
-                finalTagID = detections[2];
-        }
-        
-        // Map the finalTagID to a tag name.
-        std::string tagName = getTagName(finalTagID);
-        
-        // If this tag was seen before, mark it as duplicate.
+        // Save result with mapping.
+        std::string tagName = getTagName(templateID);
+        // If this tag has been seen before (and is not Blank), mark as duplicate.
         bool duplicate = false;
-        for (const auto &name : seenTags) {
-            if (name == tagName && tagName != "Blank") {
+        for (const auto &pair : templateCounts) {
+            if (pair.first == templateID && pair.second > 1 && tagName != "Blank") {
                 duplicate = true;
                 break;
             }
         }
-        if (tagName != "Blank" && !duplicate) {
-            seenTags.push_back(tagName);
+        finalResults[destinationNumber - 1] = tagName + (duplicate ? " -> duplicate" : "");
+
+        // Append intermediate results to contest.txt (for debugging/logging).
+        std::ofstream outFile("contest.txt", std::ios::app);
+        if (outFile.is_open()) {
+            outFile << "===== Timestamp: " << std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()) << " =====\n";
+            outFile << "Destination " << destinationNumber - 1 << ": " << finalResults[destinationNumber - 1] 
+                    << " (Coordinates: " << destX << ", " << destY << ", " << boxes.coords[destinationNumber - 1][2] << ")\n\n";
+            outFile.close();
+        } else {
+            ROS_ERROR("Failed to write to contest.txt");
         }
-        
-        finalResults[i] = tagName + (duplicate ? " -> duplicate" : "");
     }
-    
+
     // Return to starting position.
-    ROS_INFO("Returning to starting position (%.2f, %.2f, %.2f deg)...", startX, startY, RAD2DEG(startPhi));
+    ROS_INFO("Returning to starting position (%.2f, %.2f, %.2f deg)...", startX, startY, startPhi_deg);
     waitForConvergence(robotPose);
-    if (!Navigation::moveToGoal(startX, startY, startPhi)) {
+    if (!Navigation::moveToGoal(startX, startY, startPhi_deg)) {
         ROS_WARN("Failed to return to starting position.");
     }
     
-    // Write the detection results to the output file in the required format.
-    std::ofstream outfile("contest2_results.txt");
-    if (!outfile.is_open()) {
-        ROS_ERROR("Could not open output file for writing results.");
-    } else {
-        for (int i = 0; i < finalResults.size(); i++) {
-            outfile << "Tag " << finalResults[i] << " : Coordinates " 
-                    << "(" << boxes.coords[i][0] << ", " << boxes.coords[i][1] 
-                    << ", " << boxes.coords[i][2] << ")\n";
+    // Write final results to output file in required format.
+    std::ofstream finalFile("contest.txt", std::ios::app);
+    if (finalFile.is_open()) {
+        finalFile << "===== FINAL RESULTS =====\n";
+        for (size_t i = 0; i < finalResults.size(); i++) {
+            finalFile << "Tag " << finalResults[i] << " : Coordinates ("
+                      << boxes.coords[i][0] << ", " << boxes.coords[i][1] << ", " 
+                      << boxes.coords[i][2] << ")\n";
         }
-        outfile.close();
-        ROS_INFO("Results written to contest2_results.txt");
+        finalFile.close();
+        ROS_INFO("Final results written to contest.txt");
+    } else {
+        ROS_ERROR("Failed to write final results to contest.txt");
     }
     
     ROS_INFO("------PROGRAM END------");
-    spinner.stop();
     return 0;
 }

@@ -1,21 +1,28 @@
 #include "imagePipeline.h"
-#include "boxes.h"  // Include the full definition of Boxes.
+#include "boxes.h"
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/xfeatures2d.hpp>
 #include <opencv2/features2d.hpp>
 #include <iostream>
+#include <fstream>
 
 #define IMAGE_TYPE sensor_msgs::image_encodings::BGR8
-#define IMAGE_TOPIC "camera/rgb/image_raw"  // Kinect: "camera/rgb/image_raw", webcam: "camera/image"
+#define IMAGE_TOPIC "camera/rgb/image_raw"
+#define DEBUG_MODE true  // Enable debug display
+
+// Contour filtering parameters.
+constexpr double MIN_AREA_RATIO = 0.02;   // Minimum area ratio
+constexpr double MAX_AREA_RATIO = 0.98;   // Maximum area ratio
+constexpr double MIN_ASPECT_RATIO = 0.3;    // Minimum aspect ratio
+constexpr double MAX_ASPECT_RATIO = 3.0;    // Maximum aspect ratio
+constexpr double CENTER_WEIGHT = 0.6;       // Weight for center position
 
 ImagePipeline::ImagePipeline(ros::NodeHandle& n) {
     image_transport::ImageTransport it(n);
     sub = it.subscribe(IMAGE_TOPIC, 1, &ImagePipeline::imageCallback, this);
     isValid = false;
-    // Create a SURF detector with a hessian threshold (tunable).
-    detector = cv::xfeatures2d::SURF::create(400);
-    // Create a BFMatcher with L2 norm (SURF descriptors are float).
+    detector = cv::xfeatures2d::SURF::create(500);  // Increased Hessian threshold.
     matcher = cv::BFMatcher::create(cv::NORM_L2);
 }
 
@@ -26,132 +33,176 @@ void ImagePipeline::imageCallback(const sensor_msgs::ImageConstPtr& msg) {
     } catch (cv_bridge::Exception& e) {
         std::cerr << "Image conversion error: " << e.what() << std::endl;
         isValid = false;
-    }    
+    }
+}
+
+cv::Rect ImagePipeline::adaptiveCropping() {
+    cv::Mat processingImg = img.clone();
+    
+    // Stage 1: Preprocessing - convert to grayscale.
+    cv::Mat gray, blurred;
+    cv::cvtColor(processingImg, gray, cv::COLOR_BGR2GRAY);
+    
+    // Adaptive Gaussian blur.
+    int blurKernel = static_cast<int>(gray.cols * 0.005) | 1;
+    blurKernel = std::max(3, std::min(blurKernel, 11));
+    cv::GaussianBlur(gray, blurred, cv::Size(blurKernel, blurKernel), 0);
+    
+    // Stage 2: Dynamic edge detection using Canny.
+    cv::Mat edges;
+    double meanVal = cv::mean(blurred)[0];
+    cv::Canny(blurred, edges, 0.67 * meanVal, 1.33 * meanVal);
+    
+    // Stage 3: Contour analysis.
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(edges, contours, cv::RETR_LIST, cv::CHAIN_APPROX_SIMPLE);
+    
+    cv::Rect bestROI;
+    double maxScore = 0.0;
+    
+    for (const auto& contour : contours) {
+        cv::Rect rect = cv::boundingRect(contour);
+        
+        // Area filtering
+        double areaRatio = cv::contourArea(contour) / (gray.cols * gray.rows);
+        if (areaRatio < MIN_AREA_RATIO || areaRatio > MAX_AREA_RATIO) continue;
+
+        // Aspect ratio filtering
+        double aspect = static_cast<double>(rect.width) / rect.height;
+        if (aspect < MIN_ASPECT_RATIO || aspect > MAX_ASPECT_RATIO) continue;
+
+        // Position scoring
+        cv::Point center(rect.x + rect.width/2, rect.y + rect.height/2);
+        double centerDist = cv::norm(center - cv::Point(gray.cols/2, gray.rows/2));
+        double positionScore = 1.0 - (centerDist / (gray.cols * 0.5));
+        double totalScore = (CENTER_WEIGHT * positionScore) + ((1 - CENTER_WEIGHT) * areaRatio);
+        if (totalScore > maxScore) {
+            maxScore = totalScore;
+            bestROI = rect;
+        }
+    }
+    
+    // Stage 4: Dynamic ROI adjustment.
+    if (maxScore > 0.3 && !bestROI.empty()) {
+        double sizeFactor = static_cast<double>(bestROI.area()) / img.size().area();
+        double padding = 0.1 + 0.15 * (1.0 - sizeFactor);
+
+        bestROI.x -= bestROI.width * padding;
+        bestROI.y -= bestROI.height * padding;
+        bestROI.width *= (1 + 2 * padding);
+        bestROI.height *= (1 + 2 * padding);
+
+        // Boundary constraints
+        bestROI.x = std::max(0, bestROI.x);
+        bestROI.y = std::max(0, bestROI.y);
+        bestROI.width = std::min(img.cols - bestROI.x, bestROI.width);
+        bestROI.height = std::min(img.rows - bestROI.y, bestROI.height);
+        
+        return bestROI;
+    }
+    
+    // Stage 5: Fallback strategy: try fixed center crops.
+    const std::vector<double> cropRatios{0.7, 0.5, 0.3};
+    for (double ratio : cropRatios) {
+        int size = static_cast<int>(img.cols * ratio);
+        cv::Rect roi((img.cols - size)/2, (img.rows - size)/2, size, size);
+        
+        cv::Mat testCrop = img(roi);
+        std::vector<cv::KeyPoint> kp;
+        detector->detect(testCrop, kp);
+        if (kp.size() > 15) return roi;
+    }
+    
+    // Final fallback: center 50%.
+    return cv::Rect(img.cols/4, img.rows/4, img.cols/2, img.rows/2);
 }
 
 int ImagePipeline::getTemplateID(Boxes& boxes) {
-    int bestTemplateID = -1;
-    int maxGoodMatches = 0;
-    
     if (!isValid || img.empty()) {
-        std::cerr << "Invalid image for SURF detection" << std::endl;
+        std::cerr << "Invalid image for processing" << std::endl;
         return -1;
     }
-
+    
+    // Perform adaptive cropping.
+    cv::Rect roi = adaptiveCropping();
     cv::Mat cropped;
     try {
-        // ===== ADAPTIVE CROPPING USING EDGE DETECTION =====
-        cv::Mat grayFull;
-        cv::cvtColor(img, grayFull, cv::COLOR_BGR2GRAY);
-        cv::GaussianBlur(grayFull, grayFull, cv::Size(5, 5), 0);
-
-        // Edge detection with Canny
-        cv::Mat edges;
-        cv::Canny(grayFull, edges, 50, 150);
-
-        // Find contours in the edge map
-        std::vector<std::vector<cv::Point>> contours;
-        cv::findContours(edges, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-        if (!contours.empty()) {
-            // Find largest contour by area
-            int maxIdx = -1;
-            double maxArea = 0;
-            for (size_t i = 0; i < contours.size(); ++i) {
-                double area = cv::contourArea(contours[i]);
-                if (area > maxArea) {
-                    maxArea = area;
-                    maxIdx = i;
-                }
-            }
-
-            if (maxIdx != -1) {
-                // Get bounding rect with 10% padding
-                cv::Rect boundingRect = cv::boundingRect(contours[maxIdx]);
-                int padX = boundingRect.width * 0.1;
-                int padY = boundingRect.height * 0.1;
-                
-                // Expand ROI with boundary checks
-                boundingRect.x = std::max(0, boundingRect.x - padX);
-                boundingRect.y = std::max(0, boundingRect.y - padY);
-                boundingRect.width = std::min(img.cols - boundingRect.x, 
-                                           boundingRect.width + 2 * padX);
-                boundingRect.height = std::min(img.rows - boundingRect.y,
-                                            boundingRect.height + 2 * padY);
-
-                cropped = img(boundingRect).clone();
-            }
+        cropped = img(roi).clone();
+        // Size assurance: if the cropped image is too small, resize it.
+        if (cropped.rows < 50 || cropped.cols < 50) {
+            cv::resize(cropped, cropped, cv::Size(100, 100), 0, 0, cv::INTER_LANCZOS4);
         }
-
-        // Fallback to center crop if no contours found
-        if (cropped.empty()) {
-            int cropWidth = img.cols / 2;
-            int cropHeight = img.rows / 2;
-            cv::Rect roi((img.cols - cropWidth)/2, (img.rows - cropHeight)/2,
-                       cropWidth, cropHeight);
-            cropped = img(roi).clone();
-        }
-
-    } catch (const cv::Exception &e) {
-        std::cerr << "Cropping error: " << e.what() << std::endl;
+    } catch (const cv::Exception& e) {
+        std::cerr << "Cropping failed: " << e.what() << std::endl;
         return -1;
     }
-
-    // ===== REST OF SURF PROCESSING =====
+    
+    // SURF feature processing.
     cv::Mat gray;
     cv::cvtColor(cropped, gray, cv::COLOR_BGR2GRAY);
     
-    std::vector<cv::KeyPoint> keypointsImg;
-    cv::Mat descriptorsImg;
-    detector->detectAndCompute(gray, cv::noArray(), keypointsImg, descriptorsImg);
+    std::vector<cv::KeyPoint> kpImage;
+    cv::Mat descImage;
+    detector->detectAndCompute(gray, cv::noArray(), kpImage, descImage);
 
-   //compare image code
-    if (descriptorsImg.empty()) {
-        std::cerr << "No descriptors found in current image" << std::endl;
+    if (descImage.empty()) {
+        if (DEBUG_MODE) {
+            std::cout << "No features detected in cropped image" << std::endl;
+        }
         return -1;
     }
     
-    // Iterate through each template loaded in Boxes.
-    for (size_t i = 0; i < boxes.templates.size(); i++) {
-        cv::Mat templ = boxes.templates[i];
-        if (templ.empty()) continue;
+    // Template matching.
+    int bestMatch = -1;
+    int maxMatches = 0;
+    const int MIN_MATCHES = 15;
+    
+    for (size_t i = 0; i < boxes.templates.size(); ++i) {
+        if (boxes.templates[i].empty()) continue;
         
         cv::Mat templGray;
-        if (templ.channels() == 3)
-            cv::cvtColor(templ, templGray, cv::COLOR_BGR2GRAY);
-        else
-            templGray = templ;
-        
-        std::vector<cv::KeyPoint> keypointsTempl;
-        cv::Mat descriptorsTempl;
-        detector->detectAndCompute(templGray, cv::noArray(), keypointsTempl, descriptorsTempl);
-        
-        if (descriptorsTempl.empty()) continue;
-        
-        std::vector<std::vector<cv::DMatch>> knnMatches;
-        matcher->knnMatch(descriptorsTempl, descriptorsImg, knnMatches, 2);
-        
-        int goodMatches = 0;
-        // Apply Lowe's ratio test.
-        for (size_t j = 0; j < knnMatches.size(); j++) {
-            if (knnMatches[j].size() < 2) continue;
-            if (knnMatches[j][0].distance < 0.75 * knnMatches[j][1].distance)
-                goodMatches++;
+        if (boxes.templates[i].channels() == 3) {
+            cv::cvtColor(boxes.templates[i], templGray, cv::COLOR_BGR2GRAY);
+        } else {
+            templGray = boxes.templates[i];
         }
         
-        if (goodMatches > maxGoodMatches) {
-            maxGoodMatches = goodMatches;
-            bestTemplateID = i;
+        std::vector<cv::KeyPoint> kpTemplate;
+        cv::Mat descTemplate;
+        detector->detectAndCompute(templGray, cv::noArray(), kpTemplate, descTemplate);
+
+        if (descTemplate.empty()) continue;
+        
+        // Two-way matching.
+        std::vector<std::vector<cv::DMatch>> matches;
+        matcher->knnMatch(descTemplate, descImage, matches, 2);
+        
+        std::vector<cv::DMatch> validMatches;
+        for (const auto& m : matches) {
+            if (m.size() >= 2 && m[0].distance < 0.7 * m[1].distance) {
+                if (m[0].queryIdx >= 0 && m[0].queryIdx < kpTemplate.size() &&
+                    m[0].trainIdx >= 0 && m[0].trainIdx < kpImage.size()) {
+                    validMatches.push_back(m[0]);
+                }
+            }
+        }
+        
+        matcher->knnMatch(descImage, descTemplate, matches, 2);
+        for (const auto& m : matches) {
+            if (m.size() >= 2 && m[0].distance < 0.7 * m[1].distance) {
+                if (m[0].queryIdx >= 0 && m[0].queryIdx < kpImage.size() &&
+                    m[0].trainIdx >= 0 && m[0].trainIdx < kpTemplate.size()) {
+                    validMatches.push_back(cv::DMatch(m[0].trainIdx, m[0].queryIdx, m[0].distance));
+                }
+            }
+        }
+        
+        if (validMatches.size() > maxMatches && validMatches.size() >= MIN_MATCHES) {
+            maxMatches = validMatches.size();
+            bestMatch = i;
         }
     }
     
-    // Set a threshold for detection (e.g., at least 10 good matches).
-    if (maxGoodMatches < 10)
-        bestTemplateID = -1;
-
-    // Display adaptive crop instead of center crop
-    cv::imshow("Adaptive Crop", gray);
-    cv::waitKey(10);
-
-    return bestTemplateID;
+    // Require at least 50 good matches for a valid detection.
+    return (maxMatches >= 50) ? bestMatch : -1;
 }
