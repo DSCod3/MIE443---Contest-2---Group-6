@@ -159,6 +159,9 @@ int main(int argc, char** argv) {
 
         // 每秒追加写入统计结果
         
+        // 初始化模板名称数组
+        std::string templateNames[] = {"raisin bran", "cinnamon toast crunch", "rice krispie", "blank"};
+
         auto currentTime = std::chrono::system_clock::now();
         //ros::Duration(1.5).sleep();
         //static auto lastWriteTime = std::chrono::system_clock::now();
@@ -167,14 +170,36 @@ int main(int argc, char** argv) {
             while(!outFile.is_open());
             if (outFile.is_open()) {
                 outFile << "===== Timestamp: " << std::chrono::system_clock::to_time_t(currentTime) << " =====" << std::endl;
+                // 检查当前目标点是否有最佳匹配
                 if (bestMatchPerDestination.find(destinationNumber) != bestMatchPerDestination.end()) {
-                    int bestMatch = bestMatchPerDestination[destinationNumber];
-                    outFile << "Destination " << std::to_string(destinationNumber) << ": Template " << bestMatch 
-                             << " (appeared " << templateCounts[bestMatch] << " times)" << std::endl;
+                    int bestMatch = bestMatchPerDestination[destinationNumber]; // 获取最佳匹配的模板ID
+
+                    // 根据模板ID获取模板名称
+                    std::string templateName;
+                    if (bestMatch == -1) {
+                        templateName = templateNames[3]; // 使用 'blank'
+                    } else if (bestMatch >= 0 && bestMatch < 3) {
+                        templateName = templateNames[bestMatch]; // 使用对应的模板名称
+                    } else {
+                        templateName = "unknown"; // 处理意外情况
+                    }
+
+                    // 获取模板出现次数
+                    int count = (bestMatch == -1) ? 0 : templateCounts[bestMatch];
+
+                    // 写入当前目标点的最佳匹配信息和机器人位置
+                    outFile << "Destination " << std::to_string(destinationNumber) << ": " << templateName 
+                            << " (appeared " << count << " times), "
+                            << "Robot Position: (" << robotPose.x << ", " << robotPose.y << ", " << robotPose.phi << ")" << std::endl;
                 } else {
-                    outFile << "Destination " << std::to_string(destinationNumber) << ": No match" << std::endl;
+                    // 如果当前目标点没有匹配
+                    outFile << "Destination " << std::to_string(destinationNumber) << ": blank (appeared 0 times), "
+                            << "Robot Position: (" << robotPose.x << ", " << robotPose.y << ", " << robotPose.phi << ")" << std::endl;
                 }
+
+                // 写入空行分隔
                 outFile << std::endl;
+
                 //lastWriteTime = currentTime;
             } else {
                 ROS_ERROR("Failed to write to contest.txt");
