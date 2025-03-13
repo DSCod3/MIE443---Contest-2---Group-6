@@ -27,10 +27,10 @@ bool Navigation::moveToGoal(float xGoal, float yGoal, float phiGoal){
     ac.sendGoal(goal);
     ac.waitForResult();
     if(ac.getState() == actionlib::SimpleClientGoalState::SUCCEEDED){
-        ROS_INFO("You have reached the destination");
+        //ROS_INFO("You have reached the destination.");
         return true;
     } else {
-        ROS_INFO("The robot failed to reach the destination");
+        //ROS_INFO("The robot failed to reach the destination.");
         return false;
     }
 }

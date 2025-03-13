@@ -1,3 +1,4 @@
+// REMEMBER TO CHANGE THE BOXES COORDINATE FILE AND THE PHI CALCULATION (DEG/RAD) BEFORE RUNNING
 #include <boxes.h>
 #include <navigation.h>
 #include <robot_pose.h>
@@ -63,6 +64,22 @@ int main(int argc, char** argv) {
     for(int i=0; i < boxes.coords.size(); i++){
         ROS_INFO("x/y/phi: %.2f/%.2f/%.2f", boxes.coords[i][0], boxes.coords[i][1], RAD2DEG(boxes.coords[i][2]));
     }
+
+    #pragma region Get Starting Pose
+
+    ros::Rate loopRate(10);
+    while (ros::ok() && !robotPose.pose_received) {
+        ros::spinOnce();
+        ROS_WARN("Waiting for initial pose estimate. Please use RViz's '2D Pose Estimate' tool.");
+        loopRate.sleep();
+    }
+    ros::Duration(2.0).sleep();
+    ROS_INFO("Initial pose: (%.2f, %.2f, %.2f)", robotPose.x, robotPose.y, robotPose.phi);
+
+    float startX = robotPose.x;
+    float startY = robotPose.y;
+    float startPhi = robotPose.phi;
+    #pragma endregion
     
     // Execute strategy.
     while(ros::ok() && secondsElapsed <= 300) {
@@ -102,20 +119,17 @@ int main(int argc, char** argv) {
             }
         }
 
-
-
-
-
-        // Status Printing
+        #pragma region Status Printing
         if(secondsElapsed > lastReportTimestamp + reportingInterval){
             // Print stuff to report here
            // ROS_INFO("AbsX/AbsY/AbsYaw %.2f, %.2f, %.2f", robotPose.x, robotPose.y, robotPose.phid);
 
-
             // End of printing
             lastReportTimestamp = secondsElapsed;
         }
+        #pragma endregion
 
+        #pragma region Target Position Calculation
         destX = boxes.coords[destinationNumber][0];
         destY = boxes.coords[destinationNumber][1];
         destPhi = boxes.coords[destinationNumber][2];
@@ -132,11 +146,13 @@ int main(int argc, char** argv) {
         }
 
         ROS_INFO("V-----------------------------------------------V");
-        ROS_INFO("Moving to destination %u at x/y/phi: %.2f/%.2f/%.2f", destinationNumber, destX, destY, RAD2DEG(destPhi));
+        ROS_INFO("Moving to destination %u of %lu at x/y/phi: %.2f/%.2f/%.2f", destinationNumber+1, boxes.coords.size(), destX, destY, RAD2DEG(destPhi));
 
         offsetCoordinates(offsetFromTarget, destX, destY, destPhi, targetX, targetY);
         ROS_INFO("Adjusted position x/y/phi: %.2f/%.2f/%.2f", targetX, targetY, RAD2DEG(targetPhi));       
-        
+        #pragma endregion
+
+        #pragma region Movement Execution
         if(!Navigation::moveToGoal(targetX, targetY, targetPhi)){
             ROS_INFO("moveToGoal error.");
             destinationNumber++;
@@ -145,22 +161,30 @@ int main(int argc, char** argv) {
         else{
             
             ROS_INFO("Destination reached!");
-            ros::Duration(5).sleep();
+            ros::Duration(2).sleep();
             destinationNumber++;
 
-            if(destinationNumber > boxes.coords.size()){
+            if(destinationNumber >= boxes.coords.size()){
                 break;
             }
         }
-
-
-
-
+        #pragma endregion
 
         secondsElapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now()-start).count();
     
     }
 
+    #pragma region Return to Starting Position
+    ROS_INFO("Returning to starting position (%.2f, %.2f, %.2f deg)...", startX, startY, startPhi);
+    //waitForConvergence(robotPose);
+    if (!Navigation::moveToGoal(startX, startY, startPhi)) {
+        ROS_INFO("...failed to return to starting position.");
+    }
+    else{
+        ROS_INFO("...successfully returned to starting position.");
+    }
+
+    #pragma endregion
 
      // 程序结束前写入最终统计 debug 用的
     std::ofstream finalFile("contest.txt", std::ios::app);
