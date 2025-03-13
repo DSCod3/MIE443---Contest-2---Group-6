@@ -80,44 +80,13 @@ int main(int argc, char** argv) {
     float startY = robotPose.y;
     float startPhi = robotPose.phi;
     #pragma endregion
+
+    imagePipeline.getTemplateID(boxes);
+    ros::Duration(0.01).sleep();
     
     // Execute strategy.
     while(ros::ok() && secondsElapsed <= 300) {
         ros::spinOnce();
-        // Use: boxes.coords
-        // Use: robotPose.x, robotPose.y, robotPose.phi
-        imagePipeline.getTemplateID(boxes);
-        ros::Duration(0.01).sleep();
-
-        //write into contest2 txt
-        // 图像处理部分
-        int templateID = imagePipeline.getTemplateID(boxes);
-        if (templateID != -1) {
-            templateCounts[templateID]++; // 更新全局统计
-            bestMatchPerDestination[destinationNumber] = templateID; // 更新当前目标点的最佳匹配
-            ROS_INFO("Detected template %d at destination %d", templateID, destinationNumber);
-        }
-
-        // 每秒追加写入统计结果
-        auto currentTime = std::chrono::system_clock::now();
-        static auto lastWriteTime = currentTime;
-        if (std::chrono::duration_cast<std::chrono::seconds>(currentTime - lastWriteTime).count() >= 1) {
-            std::ofstream outFile("contest.txt", std::ios::app); // 追加模式
-            if (outFile.is_open()) {
-                outFile << "===== Timestamp: " << std::chrono::system_clock::to_time_t(currentTime) << " =====" << std::endl;
-                if (bestMatchPerDestination.find(destinationNumber) != bestMatchPerDestination.end()) {
-                    int bestMatch = bestMatchPerDestination[destinationNumber];
-                    outFile << "Destination " << destinationNumber << ": Template " << bestMatch 
-                             << " (appeared " << templateCounts[bestMatch] << " times)" << std::endl;
-                } else {
-                    outFile << "Destination " << destinationNumber << ": No match" << std::endl;
-                }
-                outFile << std::endl;
-                lastWriteTime = currentTime;
-            } else {
-                ROS_ERROR("Failed to write to contest.txt");
-            }
-        }
 
         #pragma region Status Printing
         if(secondsElapsed > lastReportTimestamp + reportingInterval){
@@ -146,7 +115,7 @@ int main(int argc, char** argv) {
         }
 
         ROS_INFO("V-----------------------------------------------V");
-        ROS_INFO("Moving to destination %u of %lu at x/y/phi: %.2f/%.2f/%.2f", destinationNumber+1, boxes.coords.size(), destX, destY, RAD2DEG(destPhi));
+        ROS_INFO("Moving to destination %u of %lu at x/y/phi: %.2f/%.2f/%.2f", destinationNumber, boxes.coords.size(), destX, destY, RAD2DEG(destPhi));
 
         offsetCoordinates(offsetFromTarget, destX, destY, destPhi, targetX, targetY);
         ROS_INFO("Adjusted position x/y/phi: %.2f/%.2f/%.2f", targetX, targetY, RAD2DEG(targetPhi));       
@@ -155,21 +124,59 @@ int main(int argc, char** argv) {
         #pragma region Movement Execution
         if(!Navigation::moveToGoal(targetX, targetY, targetPhi)){
             ROS_INFO("moveToGoal error.");
-            destinationNumber++;
         }
 
         else{
             
             ROS_INFO("Destination reached!");
-            ros::Duration(2).sleep();
-            destinationNumber++;
-
-            if(destinationNumber >= boxes.coords.size()){
-                break;
-            }
+            ros::Duration(5).sleep();
         }
         #pragma endregion
 
+        #pragma region Image Processing
+        imagePipeline.getTemplateID(boxes);
+        ros::Duration(0.01).sleep();
+
+        //write into contest2 txt
+        // 图像处理部分
+        int templateID = imagePipeline.getTemplateID(boxes);
+        if (templateID != -1) {
+            templateCounts[templateID]++; // 更新全局统计
+            bestMatchPerDestination[destinationNumber] = templateID; // 更新当前目标点的最佳匹配
+            ROS_INFO("Detected template %d at destination %d", templateID, destinationNumber);
+        }
+        else{
+            ROS_INFO("Detected no template.");
+        }
+
+        // 每秒追加写入统计结果
+        auto currentTime = std::chrono::system_clock::now();
+        static auto lastWriteTime = currentTime;
+        if (std::chrono::duration_cast<std::chrono::seconds>(currentTime - lastWriteTime).count() >= 1) {
+            std::ofstream outFile("contest.txt", std::ios::app); // 追加模式
+            if (outFile.is_open()) {
+                outFile << "===== Timestamp: " << std::chrono::system_clock::to_time_t(currentTime) << " =====" << std::endl;
+                if (bestMatchPerDestination.find(destinationNumber) != bestMatchPerDestination.end()) {
+                    int bestMatch = bestMatchPerDestination[destinationNumber];
+                    outFile << "Destination " << destinationNumber << ": Template " << bestMatch 
+                             << " (appeared " << templateCounts[bestMatch] << " times)" << std::endl;
+                } else {
+                    outFile << "Destination " << destinationNumber << ": No match" << std::endl;
+                }
+                outFile << std::endl;
+                lastWriteTime = currentTime;
+            } else {
+                ROS_ERROR("Failed to write to contest.txt");
+            }
+        }
+        #pragma endregion
+        
+
+        // End condition
+        destinationNumber++;
+        if(destinationNumber >= boxes.coords.size()){
+            break;
+        }
         secondsElapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now()-start).count();
     
     }
