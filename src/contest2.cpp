@@ -7,13 +7,11 @@
 #include <fstream>
 #include <map>
 
-
 #define DEG2RAD(deg) ((deg) * (M_PI / 180.0))
 #define RAD2DEG(rad) ((rad) * (180.0 / M_PI))
 
 bool facingInwards = true;
 float offsetFromTarget = 0.50;
-
 
 // Initialize box coordinates and templates
 uint8_t destinationNumber = 0;
@@ -23,7 +21,36 @@ float targetPhi;
 float destX;
 float destY;
 float destPhi;
-uint64_t timeReference;
+uint64_t timeReference = 0;
+
+// Wait for AMCL convergence by checking that the pose remains nearly constant over a given time.
+void waitForConvergence(RobotPose &robotPose) {
+    ros::Rate rate(10);
+    // Initialize with the current pose.
+    float prevX = robotPose.x, prevY = robotPose.y, prevPhi = robotPose.phi;
+    ros::Time stableStart = ros::Time::now();
+    while (ros::ok()) {
+        rate.sleep();
+        // Compute changes since last check.
+        float dx = fabs(robotPose.x - prevX);
+        float dy = fabs(robotPose.y - prevY);
+        float dphi = fabs(robotPose.phi - prevPhi);
+        // If the change is below thresholds, check how long it's been stable.
+        if (dx < 0.01 && dy < 0.01 && dphi < 0.5) { // adjust thresholds as needed
+            if ((ros::Time::now() - stableStart).toSec() > 2.0) {
+                ROS_INFO("AMCL has converged: (%.2f, %.2f, %.2f)", robotPose.x, robotPose.y, robotPose.phi);
+                break;
+            }
+        } else {
+            // Not yet stable: reset the timer and update previous values.
+            stableStart = ros::Time::now();
+            prevX = robotPose.x;
+            prevY = robotPose.y;
+            prevPhi = robotPose.phi;
+            ROS_INFO("Waiting for AMCL convergence... Current changes: dx=%.4f, dy=%.4f, dphi=%.4f", dx, dy, dphi);
+        }
+    }
+}
 
 int main(int argc, char** argv) {
     
@@ -31,7 +58,7 @@ int main(int argc, char** argv) {
     ros::init(argc, argv, "contest2");
     ros::NodeHandle n;
 
-    // 清空文件内容（每次运行覆盖旧文件）
+    // Clear file content (overwrite old file on each run)
     std::ofstream clearFile("contest.txt", std::ios::trunc);
     clearFile.close();
 
@@ -45,11 +72,9 @@ int main(int argc, char** argv) {
         return -1;
     }
     for(int i = 0; i < boxes.coords.size(); ++i) {
-        //std::cout << "Box coordinates: " << std::endl;
-        //std::cout << i << " x: " << boxes.coords[i][0] << " y: " << boxes.coords[i][1] << " z: " 
-        //          << boxes.coords[i][2] << std::endl;
+        ROS_INFO("x/y/phi: %.2f/%.2f/%.2f", boxes.coords[i][0], boxes.coords[i][1], RAD2DEG(boxes.coords[i][2]));
     }
-    // Initialize image objectand subscriber.
+    // Initialize image object and subscriber.
     ImagePipeline imagePipeline(n);
 
     // Timer setup and Settings
@@ -59,14 +84,10 @@ int main(int argc, char** argv) {
     uint64_t reportingInterval = 0.5;
     uint64_t lastReportTimestamp = 0;
 
-    std::map<int, int> templateCounts; // 模板出现次数统计
-    std::map<int, int> bestMatchPerDestination; // 每个目标点的最佳匹配模板
-    for(int i=0; i < boxes.coords.size(); i++){
-        ROS_INFO("x/y/phi: %.2f/%.2f/%.2f", boxes.coords[i][0], boxes.coords[i][1], RAD2DEG(boxes.coords[i][2]));
-    }
+    std::map<int, int> templateCounts; // Template occurrence count
+    std::map<int, int> bestMatchPerDestination; // Best matching template per destination
 
     #pragma region Get Starting Pose
-
     ros::Rate loopRate(10);
     while (ros::ok() && !robotPose.pose_received) {
         ros::spinOnce();
@@ -75,19 +96,16 @@ int main(int argc, char** argv) {
     }
     ros::Duration(2.0).sleep();
     ROS_INFO("Initial pose: (%.2f, %.2f, %.2f)", robotPose.x, robotPose.y, robotPose.phi);
-
     float startX = robotPose.x;
     float startY = robotPose.y;
     float startPhi = robotPose.phi;
     #pragma endregion
 
-
     #pragma region Crude Fixes
-    // Initialize OpenCL runtime (not sure if this causes failure or not)
+    // Initialize OpenCL runtime (if needed)
     imagePipeline.getTemplateID(boxes);
     ros::Duration(0.01).sleep();
-
-    // Crude fix for destination writing condition ...(currentTime - lastWriteTime).count() >= 1... 
+    // Crude fix for destination writing condition...
     std::ofstream outFile("contest.txt", std::ios::app);
     #pragma endregion
     
@@ -97,10 +115,7 @@ int main(int argc, char** argv) {
 
         #pragma region Status Printing
         if(secondsElapsed > lastReportTimestamp + reportingInterval){
-            // Print stuff to report here
-           // ROS_INFO("AbsX/AbsY/AbsYaw %.2f, %.2f, %.2f", robotPose.x, robotPose.y, robotPose.phid);
-
-            // End of printing
+            // Additional reporting could be added here.
             lastReportTimestamp = secondsElapsed;
         }
         #pragma endregion
@@ -109,8 +124,7 @@ int main(int argc, char** argv) {
         destX = boxes.coords[destinationNumber][0];
         destY = boxes.coords[destinationNumber][1];
         destPhi = boxes.coords[destinationNumber][2];
-        //destPhi = DEG2RAD(boxes.coords[destinationNumber][2]);
-
+        // If facing inwards, subtract PI to flip orientation.
         if(facingInwards){
             targetPhi = destPhi - M_PI;
             while(targetPhi < -2*M_PI){
@@ -120,21 +134,22 @@ int main(int argc, char** argv) {
         else{
             targetPhi = destPhi;
         }
-
         ROS_INFO("V-----------------------------------------------V");
-        ROS_INFO("Moving to destination %u of %lu at x/y/phi: %.2f/%.2f/%.2f", destinationNumber, boxes.coords.size()-1, destX, destY, RAD2DEG(destPhi));
-
+        ROS_INFO("Moving to destination %u at x/y/phi: %.2f/%.2f/%.2f", destinationNumber, destX, destY, RAD2DEG(destPhi));
         offsetCoordinates(offsetFromTarget, destX, destY, destPhi, targetX, targetY);
-        ROS_INFO("Adjusted position x/y/phi: %.2f/%.2f/%.2f", targetX, targetY, RAD2DEG(targetPhi));       
+        ROS_INFO("Adjusted position x/y/phi: %.2f/%.2f/%.2f", targetX, targetY, RAD2DEG(targetPhi));
         #pragma endregion
 
         #pragma region Movement Execution
+        // Only wait for AMCL convergence for the first coordinate.
+        if (destinationNumber == 0) {
+            // Wait for AMCL convergence before sending the first goal.
+            waitForConvergence(robotPose);
+        }
         if(!Navigation::moveToGoal(targetX, targetY, targetPhi)){
             ROS_INFO("moveToGoal error.");
         }
-
         else{
-            
             ROS_INFO("Destination reached!");
             ros::Duration(1).sleep();
         }
@@ -143,22 +158,19 @@ int main(int argc, char** argv) {
         #pragma region Image Processing
         imagePipeline.getTemplateID(boxes);
         ros::Duration(1).sleep();
-
         ros::spinOnce();
-        //write into contest2 txt
-        // 图像处理部分
+        // Image processing section.
         int templateID = imagePipeline.getTemplateID(boxes);
         if (templateID != -1) {
-            templateCounts[templateID]++; // 更新全局统计
-            bestMatchPerDestination[destinationNumber] = templateID; // 更新当前目标点的最佳匹配
+            templateCounts[templateID]++; // Update global statistics.
+            bestMatchPerDestination[destinationNumber] = templateID; // Update best match for current destination.
             ROS_INFO("Detected template %d at destination %d", templateID, destinationNumber);
         }
         else{
             ROS_INFO("Detected no template.");
         }
 
-        // 每秒追加写入统计结果
-        
+        // Append statistics every second.
         auto currentTime = std::chrono::system_clock::now();
         //ros::Duration(1.5).sleep();
         //static auto lastWriteTime = std::chrono::system_clock::now();
@@ -182,29 +194,25 @@ int main(int argc, char** argv) {
         //}
         #pragma endregion
         
-
-        // End condition
+        // End condition.
         destinationNumber++;
         if(destinationNumber >= boxes.coords.size()){
             break;
         }
         secondsElapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now()-start).count();
-    
     }
 
     #pragma region Return to Starting Position
     ROS_INFO("Returning to starting position (%.2f, %.2f, %.2f deg)...", startX, startY, startPhi);
-    //waitForConvergence(robotPose);
     if (!Navigation::moveToGoal(startX, startY, startPhi)) {
         ROS_INFO("...failed to return to starting position.");
     }
     else{
         ROS_INFO("...successfully returned to starting position.");
     }
-
     #pragma endregion
 
-     // 程序结束前写入最终统计 debug 用的
+    // Final statistics before program ends.
     std::ofstream finalFile("contest.txt", std::ios::app);
     if (finalFile.is_open()) {
         finalFile << "===== FINAL STATISTICS =====" << std::endl;
@@ -215,7 +223,6 @@ int main(int argc, char** argv) {
                       << " (appeared " << templateCounts[bestMatch] << " times)" << std::endl;
         }
     }
-
  
     ROS_INFO("------PROGRAM END------");
     return 0;
