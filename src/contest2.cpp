@@ -81,8 +81,15 @@ int main(int argc, char** argv) {
     float startPhi = robotPose.phi;
     #pragma endregion
 
+
+    #pragma region Crude Fixes
+    // Initialize OpenCL runtime (not sure if this causes failure or not)
     imagePipeline.getTemplateID(boxes);
     ros::Duration(0.01).sleep();
+
+    // Crude fix for destination writing condition ...(currentTime - lastWriteTime).count() >= 1... 
+    std::ofstream outFile("contest.txt", std::ios::app);
+    #pragma endregion
     
     // Execute strategy.
     while(ros::ok() && secondsElapsed <= 300) {
@@ -115,7 +122,7 @@ int main(int argc, char** argv) {
         }
 
         ROS_INFO("V-----------------------------------------------V");
-        ROS_INFO("Moving to destination %u of %lu at x/y/phi: %.2f/%.2f/%.2f", destinationNumber, boxes.coords.size(), destX, destY, RAD2DEG(destPhi));
+        ROS_INFO("Moving to destination %u of %lu at x/y/phi: %.2f/%.2f/%.2f", destinationNumber, boxes.coords.size()-1, destX, destY, RAD2DEG(destPhi));
 
         offsetCoordinates(offsetFromTarget, destX, destY, destPhi, targetX, targetY);
         ROS_INFO("Adjusted position x/y/phi: %.2f/%.2f/%.2f", targetX, targetY, RAD2DEG(targetPhi));       
@@ -129,14 +136,15 @@ int main(int argc, char** argv) {
         else{
             
             ROS_INFO("Destination reached!");
-            ros::Duration(5).sleep();
+            ros::Duration(1).sleep();
         }
         #pragma endregion
 
         #pragma region Image Processing
         imagePipeline.getTemplateID(boxes);
-        ros::Duration(0.01).sleep();
+        ros::Duration(1).sleep();
 
+        ros::spinOnce();
         //write into contest2 txt
         // 图像处理部分
         int templateID = imagePipeline.getTemplateID(boxes);
@@ -150,25 +158,28 @@ int main(int argc, char** argv) {
         }
 
         // 每秒追加写入统计结果
+        
         auto currentTime = std::chrono::system_clock::now();
-        static auto lastWriteTime = currentTime;
-        if (std::chrono::duration_cast<std::chrono::seconds>(currentTime - lastWriteTime).count() >= 1) {
-            std::ofstream outFile("contest.txt", std::ios::app); // 追加模式
+        //ros::Duration(1.5).sleep();
+        //static auto lastWriteTime = std::chrono::system_clock::now();
+        //if (std::chrono::duration_cast<std::chrono::seconds>(currentTime - lastWriteTime).count() >= 1 || destinationNumber == 0) {
+            //std::ofstream outFile("contest.txt", std::ios::app); // 追加模式
+            while(!outFile.is_open());
             if (outFile.is_open()) {
                 outFile << "===== Timestamp: " << std::chrono::system_clock::to_time_t(currentTime) << " =====" << std::endl;
                 if (bestMatchPerDestination.find(destinationNumber) != bestMatchPerDestination.end()) {
                     int bestMatch = bestMatchPerDestination[destinationNumber];
-                    outFile << "Destination " << destinationNumber << ": Template " << bestMatch 
+                    outFile << "Destination " << std::to_string(destinationNumber) << ": Template " << bestMatch 
                              << " (appeared " << templateCounts[bestMatch] << " times)" << std::endl;
                 } else {
-                    outFile << "Destination " << destinationNumber << ": No match" << std::endl;
+                    outFile << "Destination " << std::to_string(destinationNumber) << ": No match" << std::endl;
                 }
                 outFile << std::endl;
-                lastWriteTime = currentTime;
+                //lastWriteTime = currentTime;
             } else {
                 ROS_ERROR("Failed to write to contest.txt");
             }
-        }
+        //}
         #pragma endregion
         
 
