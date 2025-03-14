@@ -175,14 +175,31 @@ int main(int argc, char** argv) {
             if (bestMatchPerDestination.find(destinationNumber) != bestMatchPerDestination.end()) {
                 int bestMatch = bestMatchPerDestination[destinationNumber];
 
-                outFile << "Destination " << std::to_string(destinationNumber) << "Robot Position: (" << targetX << ", " << targetY << ", " << targetPhi << ")"
-                << ": Template " << bestMatch 
-                << " (appeared " << templateCounts[bestMatch] << " times), "
-                 << std::endl;
-            } else {
-                outFile << "Destination " << std::to_string(destinationNumber) << ": No match, "
-                << "Robot Position: (" << targetX << ", " << targetY << ", " << targetPhi << ")" << std::endl;
-            }
+                // 根据模板ID获取模板名称
+                std::string templateName;
+                if (bestMatch == -1) {
+                    templateName = templateNames[3]; // 使用 'blank'
+                } else if (bestMatch >= 0 && bestMatch < 3) {
+                    templateName = templateNames[bestMatch]; // 使用对应的模板名称
+                } else {
+                    templateName = "unknown"; // 处理意外情况
+                }
+
+                // 获取模板出现次数
+                int count = (bestMatch == -1) ? 0 : templateCounts[bestMatch];
+
+                // 写入当前目标点的最佳匹配信息和机器人位置
+                outFile << "Destination " << std::to_string(destinationNumber)
+                        << "Robot Position: ( X: " << targetX << ", Y: " << targetY << ", Phi: " << targetPhi << ")" 
+                        << templateName 
+                        << " (appeared " << count << " times), "
+                        << std::endl;
+                } else {
+                    // 如果当前目标点没有匹配 safe procaution
+                    outFile << "Destination " << std::to_string(destinationNumber) << ": blank (appeared 0 times), "
+                            << "Robot Position: ( X: " << targetX << ", Y: " << targetY << ", Phi:" << targetPhi << ")" << std::endl;
+                }
+
             outFile << std::endl;
         } else {
             ROS_ERROR("Failed to write to contest.txt");
