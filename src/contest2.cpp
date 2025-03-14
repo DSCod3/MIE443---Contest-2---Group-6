@@ -166,7 +166,7 @@ int main(int argc, char** argv) {
 
         // Append statistics every second.
         // Initialize template names array.
-        std::string templateNames[] = {"raisin bran", "cinnamon toast crunch", "rice krispie", "blank"};
+        std::string templateNames[] = {"Raisin Bran", "Cinnamon Toast Crunch", "Rice Krispies", "Blank"};
 
         auto currentTime = std::chrono::system_clock::now();
         while(!outFile.is_open());
