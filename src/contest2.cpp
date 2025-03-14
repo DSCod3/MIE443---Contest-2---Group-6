@@ -14,7 +14,7 @@ bool facingInwards = true;
 float offsetFromTarget = 0.50;
 
 // Initialize box coordinates and templates
-uint8_t destinationNumber = 1;
+uint8_t destinationNumber = 0;
 float targetX;
 float targetY;
 float targetPhi;
@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
         #pragma region Target Position Calculation
         destX = boxes.coords[destinationNumber][0];
         destY = boxes.coords[destinationNumber][1];
-        destPhi = boxes.coords[destinationNumber][2];
+        destPhi = DEG2RAD(boxes.coords[destinationNumber][2]);
         // If facing inwards, subtract PI to flip orientation.
         if(facingInwards){
             targetPhi = destPhi - M_PI;
@@ -174,12 +174,14 @@ int main(int argc, char** argv) {
             outFile << "===== Timestamp: " << std::chrono::system_clock::to_time_t(currentTime) << " =====" << std::endl;
             if (bestMatchPerDestination.find(destinationNumber) != bestMatchPerDestination.end()) {
                 int bestMatch = bestMatchPerDestination[destinationNumber];
-                outFile << "Destination " << std::to_string(destinationNumber) << ": Template " << bestMatch 
-                        << " (appeared " << templateCounts[bestMatch] << " times), "
-                        << "Robot Position: (" << robotPose.x << ", " << robotPose.y << ", " << robotPose.phi << ")" << std::endl;
+
+                outFile << "Destination " << std::to_string(destinationNumber) << "Robot Position: (" << targetX << ", " << targetY << ", " << targetPhi << ")"
+                << ": Template " << bestMatch 
+                << " (appeared " << templateCounts[bestMatch] << " times), "
+                 << std::endl;
             } else {
                 outFile << "Destination " << std::to_string(destinationNumber) << ": No match, "
-                        << "Robot Position: (" << robotPose.x << ", " << robotPose.y << ", " << robotPose.phi << ")" << std::endl;
+                << "Robot Position: (" << targetX << ", " << targetY << ", " << targetPhi << ")" << std::endl;
             }
             outFile << std::endl;
         } else {
