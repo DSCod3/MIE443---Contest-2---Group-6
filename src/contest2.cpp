@@ -16,7 +16,7 @@ float offsetFromTarget = 0.50;
 
 
 // Initialize box coordinates and templates
-uint8_t destinationNumber = 0;
+uint8_t destinationNumber = 1;
 float targetX;
 float targetY;
 float targetPhi;
