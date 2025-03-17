@@ -144,7 +144,7 @@ int main(int argc, char** argv) {
         float tempY = boxes.coords[i][1];
         float tempPhi = boxes.coords[i][2];
 
-        offsetCoordinates(offsetFromTarget, tempX, tempY, tempPhi, tempX, tempY);
+        offsetCoordinates(offsetFromTarget, tempX, tempY, DEG2RAD(tempPhi), tempX, tempY);
         TSPDestinations.push_back({tempX, tempY, tempPhi});
     }
 
@@ -218,7 +218,7 @@ int main(int argc, char** argv) {
         destinationNumber = shortestPath[destinationIndex];
         targetX = TSPDestinations[destinationNumber][0];
         targetY = TSPDestinations[destinationNumber][1];
-        destPhi = TSPDestinations[destinationNumber][2];
+        destPhi = DEG2RAD(TSPDestinations[destinationNumber][2]);
         // If facing inwards, subtract PI to flip orientation. If it's destination 0 (origin), don't flip the angle
         if(facingInwards && destinationNumber != 0){
             targetPhi = destPhi - M_PI;
@@ -288,14 +288,16 @@ int main(int argc, char** argv) {
 
                     // 写入当前目标点的最佳匹配信息和机器人位置
                     outFile << "Destination " << std::to_string(shortestPath[destinationIndex])
-                            << " | Robot Position: ( X: " << targetX << ", Y: " << targetY << ", Phi: " << targetPhi << ")" 
+                            << " | Box Position: ( X: " << targetX << ", Y: " << targetY << ", Phi: " << targetPhi << ") " 
                             << templateName 
-                            << " (appeared " << count << " times), "
+                            << " (appeared " << count << " times)"
                             << std::endl;
                     } else {
                         // 如果当前目标点没有匹配 safe procaution
-                        outFile << "Destination " << std::to_string(shortestPath[destinationIndex]) << ": blank (appeared 0 times), "
-                                << " | Robot Position: ( X: " << targetX << ", Y: " << targetY << ", Phi:" << targetPhi << ")" << std::endl;
+                        outFile << "Destination " << std::to_string(shortestPath[destinationIndex])
+                                << " | Box Position: ( X: " << targetX << ", Y: " << targetY << ", Phi:" << targetPhi << ") " 
+                                << "blank (appeared 1 times)"
+                                << std::endl;
                     }
 
                 outFile << std::endl;
