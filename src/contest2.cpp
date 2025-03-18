@@ -6,6 +6,11 @@
 #include <chrono>
 #include <fstream>
 #include <map>
+#include <vector>
+#include <cmath>
+#include <limits>
+#include <ros/ros.h>
+#include <ros/spinner.h>
 
 #define DEG2RAD(deg) ((deg) * (M_PI / 180.0))
 #define RAD2DEG(rad) ((rad) * (180.0 / M_PI))
@@ -13,8 +18,8 @@
 bool facingInwards = true;
 float offsetFromTarget = 0.50;
 
-// Initialize box coordinates and templates
-uint8_t destinationNumber = 0;
+// Global variables for destination management.
+uint8_t destinationNumber = 0;  // not used as simple increment now
 float targetX;
 float targetY;
 float targetPhi;
@@ -49,6 +54,29 @@ void waitForConvergence(RobotPose &robotPose) {
     }
 }
 
+// Helper function to calculate Euclidean distance.
+double calculateDistance(float x1, float y1, float x2, float y2) {
+    float dx = x1 - x2;
+    float dy = y1 - y2;
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+// chooseClosestDestination: Given the current position and a visited vector, choose the index of the unvisited destination that is closest.
+int chooseClosestDestination(const std::vector<std::vector<float>> &coords, float currentX, float currentY, const std::vector<bool>& visited) {
+    int bestIndex = -1;
+    double bestDist = std::numeric_limits<double>::max();
+    for (size_t i = 0; i < coords.size(); i++) {
+        if (!visited[i]) {
+            double dist = calculateDistance(currentX, currentY, coords[i][0], coords[i][1]);
+            if (dist < bestDist) {
+                bestDist = dist;
+                bestIndex = i;
+            }
+        }
+    }
+    return bestIndex;
+}
+
 int main(int argc, char** argv) {
     
     // Setup ROS.
@@ -75,14 +103,16 @@ int main(int argc, char** argv) {
     ImagePipeline imagePipeline(n);
 
     // Timer setup and Settings
-    std::chrono::time_point<std::chrono::system_clock> start;
-    start = std::chrono::system_clock::now();
+    std::chrono::time_point<std::chrono::system_clock> startTime = std::chrono::system_clock::now();
     uint64_t secondsElapsed = 0;
     uint64_t reportingInterval = 0.5;
     uint64_t lastReportTimestamp = 0;
 
     std::map<int, int> templateCounts; // Template occurrence count
     std::map<int, int> bestMatchPerDestination; // Best matching template for each destination
+
+    // Create a vector to track visited destinations.
+    std::vector<bool> visited(boxes.coords.size(), false);
 
     #pragma region Get Starting Pose
     ros::Rate loopRate(10);
@@ -99,29 +129,29 @@ int main(int argc, char** argv) {
     #pragma endregion
 
     #pragma region Crude Fixes
-    // Initialize OpenCL runtime (not sure if this causes failure or not)
+    // Initialize OpenCL runtime (if needed)
     imagePipeline.getTemplateID(boxes);
     ros::Duration(0.01).sleep();
-    // Crude fix for destination writing condition ... 
+    // Crude fix for destination writing condition...
     std::ofstream outFile("contest.txt", std::ios::app);
     #pragma endregion
-    
+
     // Execute strategy.
     while(ros::ok() && secondsElapsed <= 300) {
         ros::spinOnce();
 
-        #pragma region Status Printing
-        if(secondsElapsed > lastReportTimestamp + reportingInterval){
-            // Print additional report info here if needed.
-            lastReportTimestamp = secondsElapsed;
-        }
-        #pragma endregion
-
+        // Choose the next destination based on shortest distance from current robot position.
+        int nextDest = chooseClosestDestination(boxes.coords, robotPose.x, robotPose.y, visited);
+        if (nextDest == -1) break; // No unvisited destinations remain.
+        destinationNumber = nextDest;
+        visited[destinationNumber] = true;
+        
         #pragma region Target Position Calculation
         destX = boxes.coords[destinationNumber][0];
         destY = boxes.coords[destinationNumber][1];
-        destPhi = DEG2RAD(boxes.coords[destinationNumber][2]);
+        destPhi = DEG2RAD(boxes.coords[destinationNumber][2]); // Assuming stored in degrees.
         // If facing inwards, subtract PI to flip orientation.
+        float targetPhi;
         if(facingInwards){
             targetPhi = destPhi - M_PI;
             while(targetPhi < -2*M_PI){
@@ -134,7 +164,7 @@ int main(int argc, char** argv) {
         ROS_INFO("V-----------------------------------------------V");
         ROS_INFO("Moving to destination %u of %lu at x/y/phi: %.2f/%.2f/%.2f", destinationNumber, boxes.coords.size()-1, destX, destY, RAD2DEG(destPhi));
         offsetCoordinates(offsetFromTarget, destX, destY, destPhi, targetX, targetY);
-        ROS_INFO("Adjusted position x/y/phi: %.2f/%.2f/%.2f", targetX, targetY, RAD2DEG(targetPhi));       
+        ROS_INFO("Adjusted position x/y/phi: %.2f/%.2f/%.2f", targetX, targetY, RAD2DEG(targetPhi));
         #pragma endregion
 
         #pragma region Movement Execution
@@ -174,44 +204,20 @@ int main(int argc, char** argv) {
             outFile << "===== Timestamp: " << std::chrono::system_clock::to_time_t(currentTime) << " =====" << std::endl;
             if (bestMatchPerDestination.find(destinationNumber) != bestMatchPerDestination.end()) {
                 int bestMatch = bestMatchPerDestination[destinationNumber];
-
-                // 根据模板ID获取模板名称
-                std::string templateName;
-                if (bestMatch == -1) {
-                    templateName = templateNames[3]; // 使用 'blank'
-                } else if (bestMatch >= 0 && bestMatch < 3) {
-                    templateName = templateNames[bestMatch]; // 使用对应的模板名称
-                } else {
-                    templateName = "unknown"; // 处理意外情况
-                }
-
-                // 获取模板出现次数
-                int count = (bestMatch == -1) ? 0 : templateCounts[bestMatch];
-
-                // 写入当前目标点的最佳匹配信息和机器人位置
-                outFile << "Destination " << std::to_string(destinationNumber)
-                        << "Robot Position: ( X: " << targetX << ", Y: " << targetY << ", Phi: " << targetPhi << ")" 
-                        << templateName 
-                        << " (appeared " << count << " times), "
-                        << std::endl;
-                } else {
-                    // 如果当前目标点没有匹配 safe procaution
-                    outFile << "Destination " << std::to_string(destinationNumber) << ": blank (appeared 0 times), "
-                            << "Robot Position: ( X: " << targetX << ", Y: " << targetY << ", Phi:" << targetPhi << ")" << std::endl;
-                }
-
+                outFile << "Destination " << std::to_string(destinationNumber) << ": Template " << bestMatch 
+                        << " (appeared " << templateCounts[bestMatch] << " times), "
+                        << "Robot Position: (" << robotPose.x << ", " << robotPose.y << ", " << robotPose.phi << ")" << std::endl;
+            } else {
+                outFile << "Destination " << std::to_string(destinationNumber) << ": No match, "
+                        << "Robot Position: (" << robotPose.x << ", " << robotPose.y << ", " << robotPose.phi << ")" << std::endl;
+            }
             outFile << std::endl;
         } else {
             ROS_ERROR("Failed to write to contest.txt");
         }
         #pragma endregion
-        
-        // End condition.
-        destinationNumber++;
-        if(destinationNumber >= boxes.coords.size()){
-            break;
-        }
-        secondsElapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now()-start).count();
+
+        secondsElapsed = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now()-startTime).count();
     }
 
     #pragma region Return to Starting Position
