@@ -12,7 +12,7 @@
 #define RAD2DEG(rad) ((rad) * (180.0 / M_PI))
 
 bool facingInwards = true;
-float offsetFromTarget = 0.50;
+float offsetFromTarget = 0.40;
 
 // Initialize box coordinates and templates
 uint8_t destinationIndex = 1;
@@ -238,7 +238,30 @@ int main(int argc, char** argv) {
         // Wait for AMCL convergence for every destination.
         waitForConvergence(robotPose);
         if(!Navigation::moveToGoal(targetX, targetY, targetPhi)){
-            ROS_INFO("moveToGoal error.");
+            ROS_INFO("moveToGoal error. Trying +45 deg.");
+            offsetCoordinates(-offsetDistance, targetX, targetY, destPhi, targetX, targetY);
+            destPhi += M_PI/4;
+            offsetCoordinates(offsetDistance, targetX, targetY, destPhi, targetX, targetY);
+            targetPhi = destPhi - M_PI;
+            while(targetPhi < -2*M_PI){
+                targetPhi += 2*M_PI;
+            }
+            
+            if(!Navigation::moveToGoal(targetX, targetY, targetPhi)){
+                ROS_INFO("moveTOGoal error. Trying -45 deg.");
+                offsetCoordinates(-offsetDistance, targetX, targetY, destPhi, targetX, targetY);
+                destPhi -= M_PI/2;
+                offsetCoordinates(offsetDistance, targetX, targetY, destPhi, targetX, targetY);
+                    targetPhi = destPhi - M_PI;
+                    while(targetPhi < -2*M_PI){
+                targetPhi += 2*M_PI;
+
+                if(!Navigation::moveToGoal(targetX, targetY, targetPhi)){
+                    ROS_INFO("moveToGoal error fatal.");
+                }
+            }
+            }
+
         }
         else{
             ROS_INFO("Destination reached!");
