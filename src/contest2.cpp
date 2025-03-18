@@ -8,8 +8,8 @@
 #include <map>
 #include <algorithm>
 
-#define DEG2RAD(deg) ((deg) * (M_PI / 180.0))
-#define RAD2DEG(rad) ((rad) * (180.0 / M_PI))
+#define DEG2RAD(deg) ((deg) * 1)
+#define RAD2DEG(rad) ((rad) * 1)
 
 bool facingInwards = true;
 float offsetFromTarget = 0.40;
@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
 
     ROS_INFO("Shortest path index: %d", shortestPathIndex);
 
-
+    int blankcounts = 0;
 
 
     #pragma endregion
@@ -239,9 +239,9 @@ int main(int argc, char** argv) {
         waitForConvergence(robotPose);
         if(!Navigation::moveToGoal(targetX, targetY, targetPhi)){
             ROS_INFO("moveToGoal error. Trying +45 deg.");
-            offsetCoordinates(-offsetDistance, targetX, targetY, destPhi, targetX, targetY);
+            offsetCoordinates(-offsetFromTarget, targetX, targetY, destPhi, targetX, targetY);
             destPhi += M_PI/4;
-            offsetCoordinates(offsetDistance, targetX, targetY, destPhi, targetX, targetY);
+            offsetCoordinates(offsetFromTarget, targetX, targetY, destPhi, targetX, targetY);
             targetPhi = destPhi - M_PI;
             while(targetPhi < -2*M_PI){
                 targetPhi += 2*M_PI;
@@ -249,17 +249,17 @@ int main(int argc, char** argv) {
             
             if(!Navigation::moveToGoal(targetX, targetY, targetPhi)){
                 ROS_INFO("moveTOGoal error. Trying -45 deg.");
-                offsetCoordinates(-offsetDistance, targetX, targetY, destPhi, targetX, targetY);
+                offsetCoordinates(-offsetFromTarget, targetX, targetY, destPhi, targetX, targetY);
                 destPhi -= M_PI/2;
-                offsetCoordinates(offsetDistance, targetX, targetY, destPhi, targetX, targetY);
+                offsetCoordinates(offsetFromTarget, targetX, targetY, destPhi, targetX, targetY);
                     targetPhi = destPhi - M_PI;
                     while(targetPhi < -2*M_PI){
-                targetPhi += 2*M_PI;
-
+                        targetPhi += 2*M_PI;
+                    }
                 if(!Navigation::moveToGoal(targetX, targetY, targetPhi)){
                     ROS_INFO("moveToGoal error fatal.");
                 }
-            }
+            
             }
 
         }
@@ -283,6 +283,7 @@ int main(int argc, char** argv) {
             }
             else{
                 ROS_INFO("Detected no template.");
+                blankcounts += 1;
             }
 
             // Append statistics every second.
@@ -317,9 +318,11 @@ int main(int argc, char** argv) {
                             << std::endl;
                     } else {
                         // 如果当前目标点没有匹配 safe procaution
-                        outFile << "Destination " << std::to_string(shortestPath[destinationIndex])
+                         outFile << "Destination " << std::to_string(shortestPath[destinationIndex])
                                 << " | Box Position: ( X: " << targetX << ", Y: " << targetY << ", Phi:" << targetPhi << ") " 
-                                << "blank (appeared 1 times)"
+                                << "blank (appeared "
+                                << blankcounts
+                                <<" times)"
                                 << std::endl;
                     }
 
