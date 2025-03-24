@@ -9,20 +9,20 @@
 
 #define IMAGE_TYPE sensor_msgs::image_encodings::BGR8
 #define IMAGE_TOPIC "camera/rgb/image_raw"
-#define DEBUG_MODE true  // 启用调试显示
+#define DEBUG_MODE true  // Enable debug display
 
-// 轮廓筛选参数
-constexpr double MIN_AREA_RATIO = 0.02;   // 最小区域占比
-constexpr double MAX_AREA_RATIO = 0.98;    // 最大区域占比
-constexpr double MIN_ASPECT_RATIO = 0.3;   // 最小宽高比
-constexpr double MAX_ASPECT_RATIO = 3.0;   // 最大宽高比
-constexpr double CENTER_WEIGHT = 0.6;      // 中心位置权重
+// Contour filtering parameters
+constexpr double MIN_AREA_RATIO = 0.02;   // Minimum area ratio
+constexpr double MAX_AREA_RATIO = 0.98;   // Maximum area ratio
+constexpr double MIN_ASPECT_RATIO = 0.3;    // Minimum aspect ratio 
+constexpr double MAX_ASPECT_RATIO = 3.0;    // Maximum aspect ratio
+constexpr double CENTER_WEIGHT = 0.6;       // Center position weight
 
 ImagePipeline::ImagePipeline(ros::NodeHandle& n) {
     image_transport::ImageTransport it(n);
     sub = it.subscribe(IMAGE_TOPIC, 1, &ImagePipeline::imageCallback, this);
     isValid = false;
-    detector = cv::xfeatures2d::SURF::create(500);  // 提高Hessian阈值
+    detector = cv::xfeatures2d::SURF::create(500);  // Increase Hessian threshold 
     matcher = cv::BFMatcher::create(cv::NORM_L2);
 }
 
@@ -83,9 +83,8 @@ cv::Rect ImagePipeline::adaptiveCropping() {
         double centerDist = cv::norm(center - cv::Point(gray.cols/2, gray.rows/2));
         double positionScore = 1.0 - (centerDist / (gray.cols * 0.5));
 
-        // Total score
-        double totalScore = (CENTER_WEIGHT * positionScore) + 
-                          ((1 - CENTER_WEIGHT) * areaRatio);
+        // Total score calculation
+        double totalScore = (CENTER_WEIGHT * positionScore) + ((1 - CENTER_WEIGHT) * areaRatio);
 
         if (totalScore > maxScore) {
             maxScore = totalScore;
@@ -117,7 +116,6 @@ cv::Rect ImagePipeline::adaptiveCropping() {
     for (double ratio : cropRatios) {
         int size = static_cast<int>(img.cols * ratio);
         cv::Rect roi((img.cols - size)/2, (img.rows - size)/2, size, size);
-        
         cv::Mat testCrop = img(roi);
         std::vector<cv::KeyPoint> kp;
         detector->detect(testCrop, kp);
@@ -125,10 +123,7 @@ cv::Rect ImagePipeline::adaptiveCropping() {
     }
 
     // Final fallback: center 50%
-    return cv::Rect(
-        img.cols/4, img.rows/4, 
-        img.cols/2, img.rows/2
-    );
+    return cv::Rect(img.cols/4, img.rows/4, img.cols/2, img.rows/2);
 }
 
 int ImagePipeline::getTemplateID(Boxes& boxes) {
@@ -137,13 +132,12 @@ int ImagePipeline::getTemplateID(Boxes& boxes) {
         return -1;
     }
 
-    // 执行自适应裁剪
+    // Execute adaptive cropping
     cv::Rect roi = adaptiveCropping();
     cv::Mat cropped;
     try {
         cropped = img(roi).clone();
-        
-        // 尺寸保障机制
+        // Size assurance mechanism
         if (cropped.rows < 50 || cropped.cols < 50) {
             cv::resize(cropped, cropped, cv::Size(100, 100), 0, 0, cv::INTER_LANCZOS4);
         }
@@ -152,7 +146,7 @@ int ImagePipeline::getTemplateID(Boxes& boxes) {
         return -1;
     }
 
-    // SURF特征处理
+    // SURF feature processing
     cv::Mat gray;
     cv::cvtColor(cropped, gray, cv::COLOR_BGR2GRAY);
     
@@ -167,7 +161,7 @@ int ImagePipeline::getTemplateID(Boxes& boxes) {
         return -1;
     }
 
-    // 模板匹配优化
+    // Template matching optimization
     int bestMatch = -1;
     int maxMatches = 0;
     const int MIN_MATCHES = 15;
@@ -188,7 +182,7 @@ int ImagePipeline::getTemplateID(Boxes& boxes) {
 
         if (descTemplate.empty()) continue;
 
-        // 双向匹配验证
+        // Bidirectional matching verification
         std::vector<std::vector<cv::DMatch>> matches;
         matcher->knnMatch(descTemplate, descImage, matches, 2);
         
@@ -202,7 +196,7 @@ int ImagePipeline::getTemplateID(Boxes& boxes) {
             }
         }
 
-        // 反向验证
+        // Reverse verification 
         matcher->knnMatch(descImage, descTemplate, matches, 2);
         for (const auto& m : matches) {
             if (m.size() >= 2 && m[0].distance < 0.7 * m[1].distance) {
@@ -213,7 +207,7 @@ int ImagePipeline::getTemplateID(Boxes& boxes) {
             }
         }
 
-        // 调试：显示每个模板的匹配结果
+        // Debug: display matching results for each template
         if (DEBUG_MODE && !validMatches.empty()) {
             cv::Mat matchImg;
             cv::drawMatches(templGray, kpTemplate, gray, kpImage, validMatches, matchImg);

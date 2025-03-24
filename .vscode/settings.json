@@ -5,6 +5,6 @@
         "string": "cpp",
         "string_view": "cpp",
         "vector": "cpp",
-        "xstring": "cpp"
+        "algorithm": "cpp"
     }
 }
